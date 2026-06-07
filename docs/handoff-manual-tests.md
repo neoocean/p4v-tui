@@ -23,8 +23,12 @@ backend): `PYTEST_ALLOW_WRITES=1 python -m pytest -q`.
 ## Priority A — live Perforce round trips (highest risk)
 
 > The two ⚠ items here (3-way merge, permalink move-following) have now been
-> **verified against real Perforce and fixed** — both were broken. Only the
-> end-to-end TUI gestures remain to click through; details inline below.
+> **verified against real Perforce and fixed** — both were broken. The
+> end-to-end TUI gestures that previously "remained to click through" are now
+> **driven headlessly** by `tests/test_e2e_gestures.py` (Textual's
+> `run_test()` pilot scripts the exact `Alt+C` / `Ctrl+G` / `Ctrl+E` /
+> `y`/`t`/`Enter` keystrokes against the synthetic `DemoBackend`), so they run
+> in CI on every commit. Details + one navigation caveat inline below.
 
 - [x] **3-way merge editor** — create a real conflict (edit a file in two
   workspaces / branches and integrate so `p4 resolve` reports a conflict),
@@ -52,8 +56,13 @@ backend): `PYTEST_ALLOW_WRITES=1 python -m pytest -q`.
     - Also fixed: the local file was looked up via `where().clientFile`
       (client *syntax*, never on disk) instead of `.path` — the editor
       couldn't even open the file. Now uses `.path`.
-  - Remaining manual step: just the end-to-end TUI gesture (Ctrl+E in the
-    Resolve modal → pick sides → Enter).
+  - ✅ **End-to-end TUI gesture now automated** —
+    `tests/test_e2e_gestures.py::test_resolve_modal_ctrl_e_opens_merge_editor_and_applies`
+    pushes the Resolve modal, presses `Ctrl+E` on the conflicting row, asserts
+    the merge editor opens with the hunk parsed from real `resolve -af`
+    markers, presses `t` (Theirs) then `Enter`, and asserts the workspace file
+    now holds the Theirs resolution **and** that `-af` ran exactly once (the
+    accept path must not re-run it and clobber the choice).
 
 - [x] **Permalink move-tracking** — `Alt+C` on a file to copy
   its `//@p/N` address. Then **move/rename** that file (`p4 move` +
@@ -69,8 +78,28 @@ backend): `PYTEST_ALLOW_WRITES=1 python -m pytest -q`.
     backend return integration data in different shapes (list-of-lists vs
     flat `how1,0` keys) and only the CLI shape was handled — so following
     silently no-op'd on the *default* P4Python backend. Both fixed and
-    covered by `tests/test_move_following.py`. The remaining manual step
-    is only the end-to-end TUI gesture (Alt+C → move → Ctrl+G toast).
+    covered by `tests/test_move_following.py`.
+  - ✅ **End-to-end TUI gesture now automated** —
+    `tests/test_e2e_gestures.py::test_permalink_alt_c_then_ctrl_g_follows_move`
+    positions the cursor on a file, presses `Alt+C` (asserts a `//@p/N` is
+    minted for the origin), then with the backend reporting that file as
+    `move/delete`d, presses `Ctrl+G`, pastes the permalink, and asserts the
+    "Followed move: ORIGIN → RENAMED" toast fires and the app switches to the
+    workspace tab.
+  - ⚠ **Navigation caveat found (pre-existing, not move-specific):** the
+    workspace tree keys **file leaves by depot path** but **directory nodes by
+    client namespace** (`WorkspaceTree._format_file` returns the `depotFile`,
+    while dir nodes come from client-syntax `p4 dirs`). So
+    `_navigate_tree_to` → `navigate_to_path(clientFile)` walks every directory
+    correctly but the final file segment's namespace diverges, settling the
+    cursor on the file's **containing directory** rather than the leaf. This
+    affects *all* file navigation in the workspace tab (Go-to-path, permalink,
+    bookmark), not just move-following, and is a minor cosmetic miss (the file
+    is visible in the opened directory). Left as-is: making it land exactly
+    would require unifying the tree's file/dir namespace, which changes
+    `node.data` for every file and would ripple through copy-path / permalink /
+    bookmark / open-viewer / p4-action wiring — a larger change to live-verify
+    than the cosmetic gain warrants. Tracked here so it isn't rediscovered.
 
 - [x] **Shared-state cross-machine sync** (permalinks + bookmarks) —
   - On machine **A**: `Alt+C` (copy permalink) and `Ctrl+B`
@@ -164,5 +193,7 @@ backend): `PYTEST_ALLOW_WRITES=1 python -m pytest -q`.
   are now **verified against real Perforce and fixed** — see their entries
   above. The pure cores plus the real-output contract tests
   (`test_merge3.py::TestRealPerforceMarkers`, `test_move_following.py`)
-  guard against regressions; only the end-to-end TUI gestures remain as a
-  manual smoke check.
+  guard the decision logic, and the end-to-end TUI gestures are now driven
+  headlessly by `tests/test_e2e_gestures.py` — so there is no remaining
+  manual smoke check for either. The one open item from that automation is
+  the cosmetic workspace-tree file-vs-dir namespace caveat noted above.
