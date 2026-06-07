@@ -1,0 +1,7 @@
+textual>=8.0
+
+# P4Python is the preferred backend (lowest per-call latency).
+# It's optional — when the C-extension wheel can't be installed,
+# p4v-tui automatically falls back to the `p4` CLI as long as the
+# binary is on PATH. Force a backend with `P4V_BACKEND={python,cli}`.
+p4python>=2024.0

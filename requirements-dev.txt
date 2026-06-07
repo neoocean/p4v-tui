@@ -1,0 +1,11 @@
+# Dev / test dependencies — install on top of requirements.txt.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# Run the suite:
+#
+#   pytest                          # unit tests + live read-only (skip if no p4)
+#   PYTEST_ALLOW_WRITES=1 pytest    # also runs the form-CRUD probe
+#   P4V_BACKEND=cli pytest          # narrow to one backend (rare)
+
+pytest>=7.0

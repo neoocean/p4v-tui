@@ -1,0 +1,15 @@
+# Minimal pyproject so `pytest` discovers our suite without an extra
+# pytest.ini. We don't publish p4v-tui as a wheel — this file exists
+# only to scope pytest's test discovery + add the project root to
+# sys.path so `from p4v_tui import …` works inside the tests.
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers"]
+pythonpath = ["."]
+
+# Markers used by the suite.
+markers = [
+    "live: tests that need a reachable Perforce server (auto-skipped via conftest)",
+    "writes: tests that mutate server state (gated by PYTEST_ALLOW_WRITES=1)",
+]

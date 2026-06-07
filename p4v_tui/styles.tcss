@@ -1,0 +1,54 @@
+/* p4v-tui main stylesheet */
+
+#conn_bar {
+    height: 1;
+    background: $boost;
+    color: $text;
+}
+
+#job_status {
+    height: 1;
+    background: $surface;
+    color: $text;
+}
+
+#main {
+    height: 1fr;
+}
+
+#left_pane {
+    width: 60;
+    min-width: 24;
+    max-width: 120;
+    background: $panel;
+    border-right: solid $primary;
+}
+
+DepotTree, WorkspaceTree {
+    height: 1fr;
+}
+
+#right_pane {
+    width: 1fr;
+}
+
+#right_tabs {
+    height: 1fr;
+}
+
+#detail_pane {
+    height: 1fr;
+    border-top: solid $primary;
+}
+
+#detail_desc {
+    height: auto;
+    min-height: 2;
+    max-height: 8;
+    padding: 0 1;
+    background: $boost;
+}
+
+DataTable {
+    height: 1fr;
+}

@@ -1,0 +1,188 @@
+# p4v-tui configuration example.
+#
+# Copy this file (drop the `.example` suffix) to one of the following
+# paths and edit:
+#
+#   ./p4v-tui.toml             (per-project, takes precedence)
+#   ./.p4v-tui.toml
+#   ~/.p4v-tui.toml
+#   ~/.config/p4v-tui/config.toml
+#
+# Any field omitted falls back to your P4 environment / P4CONFIG, so a
+# partial file is fine. With no config file at all the app behaves
+# exactly as if it were never written — values are inherited from
+# `p4 set`.
+
+
+# --- Single-server form (legacy) ---------------------------------------
+#
+# Use [connection] when only one Perforce server is in play. Comment
+# this whole block out and use [[profile]] instead if you want a
+# picker at startup.
+
+[connection]
+port = "ssl:your-perforce-host:1666"
+# user    = "your-username"
+# client  = "your-workspace"
+# charset = "utf8"
+
+
+# --- Multi-server form (optional) --------------------------------------
+#
+# Each [[profile]] entry shows up as a row in the startup picker modal.
+# `name` is the label shown to the user; the rest are the same fields
+# as [connection]. When [[profile]] is present the [connection] block
+# above is ignored.
+#
+# [[profile]]
+# name    = "Production"
+# port    = "ssl:server-a:1666"
+# user    = "alice"
+# client  = "alice_main"
+#
+# [[profile]]
+# name    = "Staging"
+# port    = "ssl:server-b:1666"
+# user    = "alice"
+
+
+# --- Swarm review URL (optional) ---------------------------------------
+#
+# Set base_url to your team's Swarm host (without trailing slash). The
+# "Copy Swarm URL" menu item builds the per-file review URL like
+#   {base_url}/files{depot_path}?v={head_revision}
+# e.g. //depot/foo/bar.txt at rev 42 →
+#   {base_url}/files/depot/foo/bar.txt?v=42
+#
+# Without this section, the menu item shows a "configure first" toast.
+
+[swarm]
+base_url = "http://your-swarm-host"
+
+
+# --- Jira issue linkage at submit --------------------------------------
+#
+# When base_url is set, submitting surfaces the Jira issue key found in
+# the changelist description and offers its browse URL ({base}/browse/KEY);
+# if none is found it warns. The link itself is the key in the CL
+# description (Smart-Commits style) — the app makes no live Jira API call.
+# Leave the whole [jira] table out to disable the feature.
+#
+# `projects` (optional) restricts which key prefixes count, so common
+# look-alikes (UTF-8, SHA-1) aren't mistaken for issue keys.
+#
+# [jira]
+# base_url = "https://jira.your-host"
+# projects = ["ABC", "PROJ"]
+#
+# Per-depot-path projects: map a depot subtree to a Jira project so the
+# expected project is chosen from the CL's files at submit (longest
+# prefix wins). Use this OR the flat `projects` list above. Example:
+#
+# [jira.path_projects]
+# "//depot/alpha/" = "alpha"
+# "//depot/beta/"  = "beta"
+# "//depot/gamma/" = "gamma"
+
+
+# --- External editors (Open With…) -------------------------------------
+#
+# Each [[external_editor]] entry shows up as a row in the Open With…
+# picker (context menu on a tree leaf, or the "Open With…" item).
+#
+# `command` is the executable; resolved via PATH or treated as an
+# absolute path. `args` is a template — supported placeholders:
+#
+#   {path}  → full local path of the file (defaults to this if args
+#             is blank)
+#   {dir}   → parent directory
+#   {name}  → basename
+#
+# For depot files that aren't mapped into your workspace, the file
+# gets printed to a temp file and the editor is launched on that
+# copy (read-only by intent).
+#
+# [[external_editor]]
+# name    = "VS Code"
+# command = "code"
+# args    = "--goto {path}"
+#
+# [[external_editor]]
+# name    = "Notepad++"
+# command = "C:\\Program Files\\Notepad++\\notepad++.exe"
+# args    = "{path}"
+
+
+# --- Chunking strategy (optional) --------------------------------------
+#
+# Bulk operations (sync, force-sync, reconcile, clean, revert) are
+# split into chunks so the JobRunner can interleave interactive
+# commands between them. The chunk shape is configurable here.
+#
+# Modes:
+#   "count"  — fixed N files per chunk (default; predictable count)
+#   "size"   — chunks bounded by summed file size in bytes
+#              (best for sync over a slow network)
+#   "single" — one file per chunk (max responsiveness, slowest)
+#   "subdir" — one top-level subdirectory per server call
+#              (only meaningful for reconcile/clean — their default)
+#
+# Top-level [chunking] keys define the global default. Sub-tables
+# under [chunking] override one job kind without restating the
+# others. Recognised job kinds: sync, force_sync, revert, reconcile,
+# clean.
+#
+# Note: reconcile and clean ALWAYS chunk by subdirectory regardless
+# of what is set here. Their semantics depend on a server-side
+# discovery walk (added / removed files from the local filesystem),
+# which a pre-enumerated file list would silently miss. count / size
+# / single applies to sync, force_sync, and revert.
+#
+# [chunking]
+# mode            = "count"
+# files_per_chunk = 50
+# bytes_per_chunk = 52428800   # 50 MB, used when mode = "size"
+#
+# [chunking.sync]
+# # Slow network → size-based, ~100 MB per chunk so each chunk
+# # finishes in roughly the same wall-clock time.
+# mode            = "size"
+# bytes_per_chunk = 104857600
+#
+# [chunking.revert]
+# # Tiny CLs only — you're never reverting more than a handful at
+# # once; one file per chunk keeps Esc / cancel feeling instant.
+# mode = "single"
+
+
+# --- Macros (optional) ---------------------------------------------------
+#
+# Each [[macro]] entry shows up in the "Run Macro…" picker
+# (Ctrl+Shift+M). Steps run sequentially on a worker thread; failure
+# of any step halts the chain with a toast describing the error.
+#
+# Step ``kind`` choices:
+#   "p4"       — raw ``p4 …`` invocation. ``args`` is the argv list.
+#                Embed ``-c <CL>`` yourself if needed — there's no
+#                magic default-CL handling (the app's default-CL
+#                avoidance policies apply only to the dedicated
+#                actions, not to scripted ones).
+#   "sync"     — chunked + resumable sync. ``target`` defaults to
+#                "//...". Submitted via the JobRunner so progress
+#                shows up in the Log panel like any other chunk job.
+#   "notify"   — surface a toast. Useful between steps as a
+#                "checkpoint reached" signal.
+#
+# [[macro]]
+# name        = "Sync core + show pending"
+# description = "Pull latest //depot/core, then dump my pending CLs"
+# # `key` is optional. When set, the macro gets a global Textual
+# # keybinding registered at App.on_mount. Syntax follows
+# # textual.binding (e.g. "f9", "alt+1", "ctrl+shift+r"). Bad keys
+# # are skipped with a toast — they don't break the picker.
+# key         = "f9"
+# steps = [
+#     { kind = "sync",   target = "//depot/core/..." },
+#     { kind = "p4",     args   = ["changes", "-s", "pending", "-u", "alice"] },
+#     { kind = "notify", message = "Refreshed — open Pending tab" },
+# ]

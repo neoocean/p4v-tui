@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# p4v — short launcher for p4v-tui.
+#
+# Resolves its own directory and runs ``.venv/bin/python p4v.py`` from
+# there, so the user can place this wherever they like (alias, $PATH,
+# or symlink under ~/.local/bin) and not worry about cwd.  Passes all
+# arguments through unchanged.
+#
+# First-run bootstrap: when ``.venv/`` doesn't exist, the launcher
+# builds it (``python3 -m venv`` + ``pip install -r requirements.txt``)
+# before exec'ing the app. The user types ``p4v`` once and gets a
+# working environment; subsequent runs skip the setup. Set
+# ``P4V_NO_AUTO_SETUP=1`` in your shell to suppress the bootstrap and
+# fall back to the old "tell me how to install" message.
+
+set -e
+
+# Follow symlinks so a ``~/.local/bin/p4v -> repo/p4v`` install still
+# resolves to the real project directory.
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+    SELF_DIR="$(cd -P "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+    SELF="$(readlink "$SELF")"
+    case "$SELF" in
+        /*) ;;                       # absolute — use as-is
+        *)  SELF="$SELF_DIR/$SELF" ;; # relative — anchor at link's dir
+    esac
+done
+PROJECT_DIR="$(cd -P "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)"
+
+VENV_DIR="$PROJECT_DIR/.venv"
+VENV_PY="$VENV_DIR/bin/python"
+APP="$PROJECT_DIR/p4v.py"
+REQS="$PROJECT_DIR/requirements.txt"
+
+bootstrap_venv() {
+    # Pick a Python 3.11+ to seed the venv with. tomllib only landed
+    # in 3.11, and we use it in config.py. Older interpreters would
+    # nominally create a venv just fine but the app would crash on
+    # import — fail loudly here instead.
+    local py3
+    py3="$(command -v python3 || true)"
+    if [ -z "$py3" ]; then
+        cat <<EOF >&2
+❌  python3 를 PATH 에서 찾지 못했습니다.
+
+Python 3.11 이상을 먼저 설치하세요 (예: macOS 는 \`brew install
+python@3.12\`). 설치 후 다시 \`p4v\` 를 실행하면 됩니다.
+EOF
+        return 1
+    fi
+    if ! "$py3" -c \
+        'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
+        cat <<EOF >&2
+❌  python3 가 3.11 미만입니다: $($py3 --version 2>&1)
+
+tomllib (TOML 설정 파서) 가 3.11+ 에서만 제공됩니다. 3.11 이상의
+인터프리터를 PATH 에 두고 다시 시도하세요.
+EOF
+        return 1
+    fi
+
+    echo "▶ 첫 실행 — venv 생성 중 ($VENV_DIR) …" >&2
+    "$py3" -m venv "$VENV_DIR"
+    # ``--quiet`` keeps the upgrade chatter out of the way; the
+    # requirements install still shows its progress bars so the
+    # user sees that something is actually happening.
+    echo "▶ pip 업그레이드 …" >&2
+    "$VENV_PY" -m pip install --upgrade --quiet pip
+    echo "▶ requirements 설치 — 수 초 ~ 1분 소요 …" >&2
+    if ! "$VENV_PY" -m pip install -r "$REQS"; then
+        cat <<EOF >&2
+
+❌  의존성 설치 실패.
+
+상단 pip 출력에서 실패한 패키지를 확인하세요. 흔한 원인:
+  • p4python wheel 미제공 환경 → Perforce P4API + 컴파일러
+    (Xcode CLT / build-essential) 가 필요합니다.
+  • 네트워크 차단.
+
+문제 해결 후 다음을 실행하세요:
+
+    rm -rf "$VENV_DIR" && p4v
+EOF
+        return 1
+    fi
+    echo "✓ 셋업 완료." >&2
+}
+
+if [ ! -x "$VENV_PY" ]; then
+    if [ "${P4V_NO_AUTO_SETUP:-}" = "1" ]; then
+        cat <<EOF >&2
+❌  $VENV_PY 가 없습니다 (P4V_NO_AUTO_SETUP=1 로 자동 셋업 비활성).
+
+프로젝트 루트 ($PROJECT_DIR) 에서 다음을 한 번 실행하세요:
+
+    python3 -m venv .venv
+    .venv/bin/pip install -r requirements.txt
+EOF
+        exit 1
+    fi
+    bootstrap_venv || exit 1
+fi
+
+exec "$VENV_PY" "$APP" "$@"

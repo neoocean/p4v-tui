@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(p4 opened *)",
+      "Bash(p4 describe *)",
+      "Bash(p4 info *)",
+      "Bash(p4 changes *)",
+      "Bash(p4 fstat *)",
+      "Bash(p4 diff *)",
+      "Bash(p4 status *)",
+      "Bash(p4 files *)",
+      "Bash(p4 print *)"
+    ]
+  }
+}

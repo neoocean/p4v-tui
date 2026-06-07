@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Virtual environments — local-only Python installs created by
+# `python3 -m venv .venv` per the README's PEP 668 instructions.
+.venv/
+venv/
+env/
+
+# Local config that may include host names / users
+p4v-tui.toml
+.p4v-tui.toml
+*.local.toml
+
+# Cross-machine state shared via Perforce (permalinks + bookmarks).
+# Submitted to the private depot for portability, but kept OUT of a
+# future public GitHub repo — it's per-user navigation state.
+shared-state/
+
+# Maintainer-only tooling and migration notes kept in the private source
+# tree; not part of the published project.
+docs/github-migration-and-deployment.md
+docs/migration-scrub/
+docs/MEMORY.md
+docs/mirror-workflow.md
+
+# Public-mirror scrub denylist — names the very internal identifiers it
+# protects (real depot path, shared client, tenant). MUST stay private:
+# tracked in Perforce, never pushed to the public mirror. scrub_mirror.py
+# reads it; sync-to-github.sh fails closed if it's absent.
+scripts/mirror-scrub.json
+
+# Local Claude / agent tool state — may contain workspace-specific
+# bash patterns, hostnames, or personal MCP server IDs. Exclude the
+# directory contents but keep the sanitized settings.json.example
+# (read-only p4 allowlist, no personal MCP IDs) as a starting template.
+.claude/*
+!.claude/settings.json.example
+
+# Misc local scratch
+.rag_tmp/
+.scratch_*.py
+*.swp
+*.tmp
+
+# IDE / editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
