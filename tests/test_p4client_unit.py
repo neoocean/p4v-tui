@@ -740,3 +740,52 @@ class TestInvokeTimeout:
         # process, so this is a sanity check on the bounded fallback.)
         assert pc._DEFAULT_CLI_TIMEOUT_S > 0
         assert isinstance(pc._DEFAULT_CLI_TIMEOUT_S, float)
+
+
+class _RecRunBackend(_RecordingBackend):
+    """Recording backend that also captures run_tagged/run_text calls."""
+
+    def run_tagged(self, args):
+        self.events.append(("run_tagged", tuple(args)))
+        return []
+
+    def run_text(self, args):
+        self.events.append(("run_text", tuple(args)))
+        return ""
+
+
+class TestOptionLikePathGuard:
+    """Audit F4 — path args that start with '-' must be refused before
+    dispatch (p4 has no universal '--' terminator), so a crafted path
+    can't be parsed as a flag."""
+
+    def test_helper_classification(self):
+        assert pc.is_option_like_path("-rf")
+        assert pc.is_option_like_path("--streamviews")
+        assert not pc.is_option_like_path("//depot/x")
+        assert not pc.is_option_like_path("/local/x")
+        assert not pc.is_option_like_path("~/x")
+        assert not pc.is_option_like_path("@label")
+        assert not pc.is_option_like_path(123)
+        assert not pc.is_option_like_path(None)
+
+    def test_option_like_paths_never_reach_backend(self):
+        b = _RecRunBackend()
+        svc = pc.P4Service(backend=b)
+        svc.connect()
+        assert svc.dirs("-rf") == []
+        assert svc.files("-A") == []
+        assert svc.fstat("--all") == []
+        assert svc.filelog("-m9999") == []
+        assert svc.where("-x") is None
+        # The backend's run_tagged must NOT have been invoked for any.
+        assert not any(e[0] == "run_tagged" for e in b.events)
+
+    def test_normal_paths_reach_backend(self):
+        b = _RecRunBackend()
+        svc = pc.P4Service(backend=b)
+        svc.connect()
+        svc.dirs("//depot/*")
+        svc.files("//depot/*")
+        assert ("run_tagged", ("dirs", "//depot/*")) in b.events
+        assert ("run_tagged", ("files", "-e", "//depot/*")) in b.events

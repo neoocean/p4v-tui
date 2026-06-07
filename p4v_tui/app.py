@@ -32,7 +32,8 @@ from .messages import (
     BulkFileActionRequested, FileActionRequested, P4ClipboardAction,
     TreeFilterRequested,
 )
-from .p4client import P4Exception, P4Info, P4Service
+from .p4client import (
+    P4Exception, P4Info, P4Service, is_option_like_path)
 from . import pending_jobs as _pending_jobs_mod
 from .bulk_jobs import (
     ChunkedCleanJob,
@@ -1226,6 +1227,13 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
 
     @work(thread=True, group="view_file")
     def _open_file_viewer(self, depot_file: str) -> None:
+        if is_option_like_path(depot_file):
+            self.call_from_thread(
+                self.notify,
+                f"Refusing option-like path: {depot_file!r}",
+                severity="warning", timeout=5,
+            )
+            return
         try:
             result = self.p4.run("print", "-q", depot_file)
         except P4Exception as e:
@@ -3610,6 +3618,8 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         path. Used by Open With when the file isn't mapped locally."""
         import tempfile
         from pathlib import Path
+        if is_option_like_path(depot_path):
+            return None
         try:
             result = self.p4.run("print", "-q", depot_path)
         except Exception:  # noqa: BLE001

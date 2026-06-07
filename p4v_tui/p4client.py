@@ -1445,6 +1445,21 @@ def _select_backend() -> _Backend:
 # Façade — same surface callers had under the P4Python-only layout
 # ---------------------------------------------------------------------------
 
+def is_option_like_path(value: object) -> bool:
+    """True if a path/glob argument would be misparsed as a ``p4`` option.
+
+    Security guard (audit F4): ``p4`` has **no universal ``--``
+    end-of-options terminator** — e.g. ``p4 dirs --`` / ``p4 files --``
+    reply "Invalid option: --." — so a path argument that starts with
+    ``-`` could be taken as a flag (argument injection) by the server or
+    the CLI. Every legitimate target starts with ``//`` (depot), ``/`` /
+    ``~`` / a drive letter (local), or ``@`` / ``#`` (rev spec); a leading
+    ``-`` is therefore always illegitimate. Path-bearing façade methods
+    reject such values before dispatch instead of relying on ``--``.
+    """
+    return isinstance(value, str) and value.startswith("-")
+
+
 class P4Service:
     def __init__(
         self,
@@ -1679,6 +1694,8 @@ class P4Service:
     def dirs(self, depot_glob: str) -> list[str]:
         """List depot subdirectories matching ``depot_glob`` (e.g. ``//depot/*``)."""
         try:
+            if is_option_like_path(depot_glob):
+                raise P4Exception(f"option-like path refused: {depot_glob!r}")
             rows = self._run_resilient(("dirs", depot_glob))
         except P4Exception:
             return []
@@ -1694,6 +1711,8 @@ class P4Service:
         so renamed files would otherwise linger in the depot tree.
         """
         try:
+            if is_option_like_path(depot_glob):
+                raise P4Exception(f"option-like path refused: {depot_glob!r}")
             return self._run_resilient(("files", "-e", depot_glob))
         except P4Exception:
             return []
@@ -1706,6 +1725,8 @@ class P4Service:
         ``headRev``, ``headAction``, ``action``, ``depotFile``, ``clientFile``.
         """
         try:
+            if is_option_like_path(path_glob):
+                raise P4Exception(f"option-like path refused: {path_glob!r}")
             return self._run_resilient(("fstat", path_glob))
         except P4Exception:
             return []
@@ -1768,6 +1789,8 @@ class P4Service:
         if the path isn't mapped in the current client view.
         """
         try:
+            if is_option_like_path(depot_path):
+                raise P4Exception(f"option-like path refused: {depot_path!r}")
             rows = self._run_resilient(("where", depot_path))
         except P4Exception:
             return None
@@ -2026,6 +2049,8 @@ class P4Service:
         revision dicts so the UI can render row-wise.
         """
         try:
+            if is_option_like_path(depot_file):
+                raise P4Exception(f"option-like path refused: {depot_file!r}")
             rows = self._run_resilient(
                 ("filelog", "-L", "-m", str(max_revs), depot_file)
             )
