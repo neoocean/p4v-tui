@@ -647,6 +647,20 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
 
         self.push_screen(ProfilePickerModal(profiles), on_pick)
 
+    def notify(self, message: str, **kwargs) -> None:
+        """Toast with Rich markup OFF by default (security audit F5).
+
+        Toasts routinely carry server- and user-derived strings — depot
+        paths, p4 error text, file names — and Textual renders the toast
+        body as Rich markup. Defaulting ``markup=False`` means a ``[...]``
+        sequence in that data renders literally instead of being
+        interpreted (cosmetic glitch / style injection). No toast in this
+        app relies on markup; a caller that needs it passes
+        ``markup=True`` explicitly.
+        """
+        kwargs.setdefault("markup", False)
+        super().notify(message, **kwargs)
+
     def on_unmount(self) -> None:
         # Belt-and-braces: when ``action_quit`` runs we already do
         # the heavy teardown on a worker before calling ``exit()``,
