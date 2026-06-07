@@ -62,7 +62,10 @@ python p4v.py
 - Perforce 백엔드는 **P4Python 또는 `p4` CLI** 중 하나면 됩니다(자동 선택,
   `P4V_BACKEND=python|cli` 로 강제).
 - 설정은 **선택** — 없으면 P4 환경 변수 / `P4CONFIG` 를 그대로 사용합니다.
-  `[[profile]]` 이 둘 이상이면 시작 시 picker 로 고릅니다.
+  `[[profile]]` 이 둘 이상이면 시작 시 picker 로 고릅니다. ⚠️ `[[macro]]` /
+  `[[editor]]` 는 임의 로컬 명령을 실행하므로 **신뢰할 수 없는
+  `p4v-tui.toml` 을 받아 실행하지 마세요** (자세한 내용은
+  [`docs/security-audit.md`](docs/security-audit.md)).
 - 루트의 `p4v` 래퍼를 PATH 에 두면(`ln -sf "$PWD/p4v" ~/.local/bin/p4v`)
   어디서든 `p4v` 한 줄로 실행되고, `.venv` 가 없으면 자동 부트스트랩합니다.
 

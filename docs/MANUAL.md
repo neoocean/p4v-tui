@@ -95,6 +95,13 @@ P4Python (api 99)" / "Backend: p4 CLI …"). 버그 보고 시 이 줄을 첨부
 기능·결과 형식은 두 백엔드가 동일합니다(`tests/test_p4client_live.py` 의
 parametrized parity 케이스로 보장). 차이는 호출당 지연 + 의존성 무게뿐.
 
+> **보안 참고(audit F1).** CLI 백엔드는 `p4 -G`(Python marshal) 출력을
+> `marshal.load()` 로 역직렬화한다 — **사용자가 설정한 p4d 를 신뢰**하는
+> 전제(P4Python 이 자기 소켓을 믿는 것과 동일 경계)다. 신뢰 수준이 높아야
+> 하는 환경에서는 marshal 경로를 아예 쓰지 않는 **P4Python 백엔드를
+> 권장**한다(`P4V_BACKEND=python`). 자세한 위협모델은
+> [`security-audit.md`](security-audit.md) 참조.
+
 ### 2.2 PEP 668 — Homebrew / 시스템 Python 에서 막힐 때
 
 macOS Homebrew Python, 최근 Debian/Ubuntu 시스템 Python 은 `pip install`
@@ -207,6 +214,13 @@ With…). 자세한 키는 `p4v-tui.toml.example` 참조.
 
 > **로컬 설정 파일은 git 추적 제외**입니다(`.gitignore` 의 `p4v-tui.toml`,
 > `.p4v-tui.toml`, `*.local.toml`). 호스트명이 실수로 커밋되지 않습니다.
+
+> ⚠️ **보안 주의(audit F2) — 신뢰할 수 없는 `p4v-tui.toml` 을 받아 실행하지
+> 말 것.** `[[macro]]`(임의 `p4` 명령 실행)와 `[[editor]]` / Open With…(임의
+> 외부 커맨드 실행)는 본질적으로 **사용자 권한의 임의 로컬 실행**이다. 이는
+> "내 매크로/에디터를 내가 설정"하는 의도된 기능이지만, 남이 준 설정 파일을
+> 그대로 쓰면 그 안의 커맨드가 내 권한으로 실행된다. 출처가 불확실한 설정
+> 파일은 `[[macro]]` / `[[editor]]` 블록을 먼저 검토하라.
 
 ---
 
