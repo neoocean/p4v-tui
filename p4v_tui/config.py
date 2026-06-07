@@ -477,6 +477,23 @@ def build_swarm_review_url(base_url: str, change: str | int) -> str:
     return f"{base}/changes/{change}"
 
 
+def is_http_url(url: str) -> bool:
+    """True only for ``http``/``https`` URLs.
+
+    Security gate (audit F3): call before handing a URL to the system
+    browser so a misconfigured ``[swarm] base_url`` or a crafted depot
+    path can't produce a ``file:`` / ``javascript:`` / other unexpected
+    scheme that ``webbrowser.open`` would otherwise launch. Also rejects
+    schemeless / malformed input.
+    """
+    try:
+        from urllib.parse import urlparse
+        parts = urlparse(url or "")
+        return parts.scheme in ("http", "https") and bool(parts.netloc)
+    except (ValueError, TypeError):
+        return False
+
+
 def discover_profiles(cfg: Config) -> list[ConnectionConfig]:
     """Collect all P4 connection profiles known at startup.
 

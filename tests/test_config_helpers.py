@@ -11,6 +11,7 @@ from p4v_tui.config import (
     SwarmConfig,
     build_swarm_review_url,
     build_swarm_url,
+    is_http_url,
     load_config,
     write_config,
 )
@@ -47,6 +48,26 @@ class TestBuildSwarmReviewUrl:
 
     def test_trailing_slash_stripped(self):
         assert build_swarm_review_url("http://swarm/", "999") == "http://swarm/changes/999"
+
+
+class TestIsHttpUrl:
+    """Security gate (audit F3): only http/https go to the browser."""
+
+    def test_http_and_https_ok(self):
+        assert is_http_url("http://swarm/changes/1")
+        assert is_http_url("https://swarm.example/changes/42")
+
+    def test_non_http_schemes_rejected(self):
+        assert not is_http_url("file:///etc/passwd")
+        assert not is_http_url("javascript:alert(1)")
+        assert not is_http_url("ftp://host/x")
+        assert not is_http_url("data:text/html,<script>")
+
+    def test_malformed_and_schemeless_rejected(self):
+        assert not is_http_url("")
+        assert not is_http_url("not a url")
+        assert not is_http_url("http://")          # no netloc
+        assert not is_http_url("//swarm/changes/1")  # scheme-relative
 
 
 class TestLoadConfig:

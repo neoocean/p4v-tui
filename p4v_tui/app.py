@@ -3448,7 +3448,7 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         DISPLAY / no default browser) fall through to a toast with
         the URL so the user can still grab it.
         """
-        if not change or change == "default":
+        if not change or not str(change).isdigit():
             self.notify(
                 "Swarm URL needs a numbered changelist.", timeout=4,
             )
@@ -3456,8 +3456,19 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         base = self._swarm_base_or_warn()
         if not base:
             return
-        from .config import build_swarm_review_url
+        from .config import build_swarm_review_url, is_http_url
         url = build_swarm_review_url(base, change)
+        # Security gate (audit F3): only ever hand http/https URLs to the
+        # browser. A misconfigured base_url (file:, javascript:, …) falls
+        # back to clipboard instead of launching an unexpected scheme.
+        if not is_http_url(url):
+            self.notify(
+                f"Refusing to open non-http(s) URL: {url}\n"
+                "Check [swarm] base_url. Copied to clipboard instead.",
+                severity="warning", timeout=8,
+            )
+            self._copy_text(url, f"Swarm CL {change}")
+            return
         import webbrowser
         try:
             ok = webbrowser.open_new_tab(url)
