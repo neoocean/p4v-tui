@@ -86,20 +86,24 @@ backend): `PYTEST_ALLOW_WRITES=1 python -m pytest -q`.
     `move/delete`d, presses `Ctrl+G`, pastes the permalink, and asserts the
     "Followed move: ORIGIN → RENAMED" toast fires and the app switches to the
     workspace tab.
-  - ⚠ **Navigation caveat found (pre-existing, not move-specific):** the
-    workspace tree keys **file leaves by depot path** but **directory nodes by
-    client namespace** (`WorkspaceTree._format_file` returns the `depotFile`,
+  - ✅ **Navigation caveat — FIXED (was pre-existing, not move-specific).**
+    The workspace tree keys **file leaves by depot path** but **directory nodes
+    by client namespace** (`WorkspaceTree._format_file` returns the `depotFile`,
     while dir nodes come from client-syntax `p4 dirs`). So
-    `_navigate_tree_to` → `navigate_to_path(clientFile)` walks every directory
-    correctly but the final file segment's namespace diverges, settling the
-    cursor on the file's **containing directory** rather than the leaf. This
-    affects *all* file navigation in the workspace tab (Go-to-path, permalink,
-    bookmark), not just move-following, and is a minor cosmetic miss (the file
-    is visible in the opened directory). Left as-is: making it land exactly
-    would require unifying the tree's file/dir namespace, which changes
-    `node.data` for every file and would ripple through copy-path / permalink /
-    bookmark / open-viewer / p4-action wiring — a larger change to live-verify
-    than the cosmetic gain warrants. Tracked here so it isn't rediscovered.
+    `_navigate_tree_to` → `navigate_to_path(clientFile)` walked every directory
+    correctly but the final (client-syntax) file segment never exact-matched
+    the depot-keyed leaf, settling the cursor on the file's **containing
+    directory** rather than the leaf. Fixed *without* the feared
+    namespace-unification ripple: `P4Tree._match_child` adds a **final-segment
+    basename fallback** — when the last walk segment (`next_path == target`)
+    doesn't exact-match any child, it matches a *leaf* child by basename. Dir
+    nodes still match exactly (same namespace) so nothing mid-walk mis-routes,
+    and the depot tree (uniform namespace) hits the exact path first and never
+    reaches the fallback. `node.data` is unchanged, so copy-path / permalink /
+    bookmark / open-viewer / p4-action wiring are untouched. Covered
+    end-to-end by `tests/test_tree_navigation.py` (cursor lands on the
+    depot-keyed leaf for a client-syntax target; directory navigation still
+    lands on the dir).
 
 - [x] **Shared-state cross-machine sync** (permalinks + bookmarks) —
   - On machine **A**: `Alt+C` (copy permalink) and `Ctrl+B`
@@ -120,26 +124,35 @@ backend): `PYTEST_ALLOW_WRITES=1 python -m pytest -q`.
     the save must still land (atomic temp+replace bypasses read-only) and
     the file must re-open via reconcile so it is submittable.
   - The `after_write` → `p4 reconcile` round trip is now verified for the
-    open-for-add (new file) case; the open-for-**edit** on a synced
-    read-only copy is the only sub-case still relying on the manual
-    machine-B gesture above. If reconcile ever misbehaves, the file still
-    saved — just `p4 reconcile shared-state/...` by hand before submitting.
+    open-for-add (new file) case, **and** (2026-07-10) for the
+    open-for-**edit** on a synced read-only copy — the machine-B leg is
+    covered by the gated
+    `test_shared_state_live.py::test_shared_state_readonly_edit_reconciles_as_edit`
+    (chmod 444 → atomic temp+`os.replace` write → reconcile lands as
+    `edit`, both backends, reverted + restored on teardown). If reconcile
+    ever misbehaves, the file still saved — just
+    `p4 reconcile shared-state/...` by hand before submitting.
 
-- [ ] **Submit guards** — on a CL with (a) an unresolved file, (b) a file
-  ≥ 25 MB, (c) no files: press `Ctrl+S`. The confirm dialog should list
-  the matching ⛔/⚠ warnings. Confirm a clean CL shows none.
+- [x] **Submit guards** — now **automated** in
+  `tests/test_e2e_submit_guards.py` (2026-07-10): unresolved + ≥ 25 MB
+  CL lists the ⛔/⚠ warnings (with file names) and demotes the button to
+  "Submit anyway"/warning; empty CL shows the ⛔ block; a clean CL shows
+  no markers and a plain "Submit"; a remote workspace's CL refuses with
+  a toast instead of the modal.
 
-- [ ] **Partial shelve** — Pending CL menu → Shelve. Picker lists open
-  files (all checked). Uncheck some, Enter → only the checked files are
-  shelved (`p4 describe -S <CL>`). Leaving all checked == shelve-all.
+- [x] **Partial shelve** — now **automated** in
+  `tests/test_e2e_shelve_bulk.py`: unchecking files shelves only the
+  checked subset (explicit paths on the `p4 shelve` argv); leaving all
+  checked omits the file list (whole-CL shelve).
 
-- [ ] **Tree multi-select bulk** — `Space` to mark several files (glyph
-  appears), then `e` / `r` / `a` (workspace) → all marked files are
-  checked out / reverted / added **in one numbered CL**. On the depot
-  tree, mark + Get Latest / Mark for Delete via the menu. `Esc` clears
-  marks. Bulk revert prompts **once** with the full list.
+- [x] **Tree multi-select bulk** — now **automated** in
+  `tests/test_e2e_shelve_bulk.py`: two `Space`-marked workspace files →
+  `e` runs ONE `edit -c <fresh numbered CL> f1 f2`; `r` prompts exactly
+  once with the full list before one `revert f1 f2`. (The depot-tree
+  menu variants and the mark-glyph/Esc visuals stay covered by
+  `test_e2e_gestures_more.py`.)
 
-- [ ] **Jira at submit** — set `[jira] base_url` (and optionally
+- [x] **Jira at submit** — set `[jira] base_url` (and optionally
   `projects`) in `p4v-tui.toml`. With a key like `ABC-123` in the CL
   description, `Ctrl+S` shows "🔗 Jira: ABC-123 → <url>"; with none, it
   warns "No Jira issue referenced". Unset `[jira]` → no Jira line at all.
@@ -153,27 +166,56 @@ backend): `PYTEST_ALLOW_WRITES=1 python -m pytest -q`.
     `None` there, silently emptying every describe-driven file list, not
     just Jira's). Covered by
     `test_p4client_live.py::test_describe_file_fields_are_parallel_lists`.
+  - ✅ The confirm-dialog surface itself is now **automated** in
+    `tests/test_e2e_submit_guards.py` (2026-07-10): key present → "🔗
+    Jira: KEY → browse-url"; key absent → "⚠ No Jira issue referenced";
+    `[jira]` unset → no Jira line at all.
 
 ## Priority B — UI rendering + keybindings
 
-- [ ] **Command palette gone** — `Ctrl+P` no longer opens the Textual
+> Most of these are now **automated** headlessly in
+> `tests/test_e2e_gestures_more.py` (same DemoBackend + `run_test()` pilot
+> pattern). The boxes below are checked where a regression test now drives
+> the gesture; the few left open need a *visual* eyeball a headless pilot
+> can't give (true terminal rendering / phone layout).
+
+- [x] **Command palette gone** — `Ctrl+P` no longer opens the Textual
   palette; inside Fast Search it walks query history.
-- [ ] **Backend in title bar** — the Header shows `P4Python` or `p4 CLI`
+  (`test_command_palette_disabled` pins `ENABLE_COMMAND_PALETTE is False`.)
+- [x] **Backend in title bar** — the Header shows `P4Python` or `p4 CLI`
   (force the other with `P4V_BACKEND=cli|python` and re-check).
-- [ ] **Go-to-path** — `Ctrl+G`, paste a depot path (`//…`) and a local
+  (`test_backend_name_in_subtitle` asserts `sub_title` after connect.)
+- [x] **Go-to-path** — `Ctrl+G`, paste a depot path (`//…`) and a local
   absolute path; both expand + highlight the right node.
-- [ ] **Bookmarks** — `Ctrl+B` on a node ("Bookmarked…" toast),
+  (`test_ctrl_g_goto_path_navigates` drives the modal + navigation.)
+- [x] **Bookmarks** — `Ctrl+B` on a node ("Bookmarked…" toast),
   `Ctrl+Shift+B` opens the picker; `Enter` jumps + highlights, `d`/`Del`
-  removes, `Esc` closes. Confirm it persists across restarts
+  removes, `Esc` closes. Persists across restarts
   (`~/.p4v-tui/bookmarks.json`).
-- [ ] **Fast Search row actions** — in `Ctrl+F`, move focus to the results
-  list, `d` diffs the hit vs have, `g` get-latests it, `Ctrl+Enter`
-  opens the viewer. (Single letters only fire when the query Input is not
-  focused — by design.)
-- [ ] **Mark glyph rendering** — the `●` marker shows on marked nodes and
+  (`test_bookmark_add_and_picker` drives Ctrl+B add + Ctrl+Shift+B picker.)
+- [x] **Fast Search row actions** — now **automated** in
+  `tests/test_e2e_search_actions.py` (2026-07-10): a seeded SQLite
+  SearchIndex fixture drives the real query path; `d` (diff vs have) and
+  `g` (chunked get-latest) fire from the results list, and the same
+  letters typed into the focused query Input stay query text (the
+  by-design gating, pinned).
+- [x] **Mark glyph rendering** — the `●` marker shows on marked nodes and
   survives expanding/collapsing the subtree; `Esc` clears it.
+  (`test_space_marks_node_glyph_and_esc_clears`.)
+- [x] **Image / binary preview** — Enter on an image leaf renders half-block
+  ANSI art (not raw bytes); non-image binary shows a hex window.
+  (`test_enter_on_image_leaf_opens_ansi_preview`; pure renderer in
+  `tests/test_image_preview.py`.)
+- [x] **CL table filter / sort** — Pending/Submitted `Shift+M` →
+  Filter/Sort; filtering by a non-matching user empties the table.
+  (`test_pending_filter_applies_and_reduces_rows`; pure logic in
+  `tests/test_cl_table_filter.py`.) NOTE: the filter view persists to
+  `state.json`; `_isolated_home` now also redirects `state.STATE_PATH`
+  so tests can't pollute the real `~/.p4v-tui/state.json`.
 - [ ] **Merge editor layout** — hunk list + detail render legibly; no
   Textual render hang (it uses OptionList + Static, not a fresh RichLog).
+  (Logic + Ctrl+E gesture covered by `test_e2e_gestures.py`; the *visual*
+  legibility is the only manual bit.)
 - [ ] **Narrow-terminal page navigator** — on a phone / `< 100`-col
   terminal, the layout collapses to one full-screen page at a time
   (tree / Pending / History / Submitted / Log). Full checklist in

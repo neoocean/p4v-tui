@@ -34,6 +34,8 @@ from textual.containers import Container, Horizontal
 from textual.screen import ModalScreen
 from textual.widgets import Label, RichLog, Select, Static
 
+from ..utils import is_creation_action
+
 
 _PALETTE = {
     "del":   "red",
@@ -127,13 +129,13 @@ class SideBySideDiffModal(ModalScreen[None]):
 
         ``files`` is ``[(depot_path, current_rev, action), …]``.
         For each file the left side is ``depot_path#rev-1`` (or
-        empty if it's an add/branch with no predecessor) and the
-        right side is ``depot_path#rev``. The picker label is
-        ``"<action>  <path>#<rev>"``.
+        empty if it's a creation — add/branch/import/move/add — with no
+        predecessor) and the right side is ``depot_path#rev``. The picker
+        label is ``"<action>  <path>#<rev>"``.
         """
         pairs: list[tuple[str, str, str]] = []
         for path, rev, action in files:
-            if action in ("add", "branch") or rev <= 1:
+            if rev <= 1 or is_creation_action(action):
                 left_spec = ""
             else:
                 left_spec = f"{path}#{rev - 1}"

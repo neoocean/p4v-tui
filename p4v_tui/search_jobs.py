@@ -29,6 +29,11 @@ from .p4client import P4Exception, P4Service
 from .search_index import (
     DEFAULT_MAX_BYTES, SearchIndex,
 )
+# Re-exported: the gone-at-head action classifier now lives in utils so
+# every p4-action consumer shares one definition. Kept importable here
+# (``from p4v_tui.search_jobs import is_deleted_at_head``) for callers
+# and tests that already reference it.
+from .utils import is_deleted_at_head  # noqa: F401
 
 
 # Page size for the per-subdir ``p4 files`` calls. Big enough to
@@ -210,16 +215,18 @@ class IndexBuildJob(Job):
             )
         except P4Exception:
             rows = []
-        # Filter delete-action rows out of the upsert path so the
-        # index doesn't carry dead entries from the start. (Updates
-        # to existing files via the same path will hit the head
-        # version anyway when the file's resurrected.)
+        # Filter gone-at-head rows out of the upsert path so the
+        # index doesn't carry dead entries from the start. ``files``
+        # here is the raw paged call (no ``-e``), so it returns
+        # ``move/delete`` / ``purge`` / ``archive`` too — not just
+        # plain ``delete``. (Updates to existing files via the same
+        # path will hit the head version anyway when resurrected.)
         kept: list[dict] = []
         for r in rows:
             if not isinstance(r, dict):
                 continue
             action = str(r.get("action") or r.get("headAction") or "")
-            if action == "delete":
+            if is_deleted_at_head(action):
                 continue
             kept.append(r)
         self._index.upsert_files(kept)
@@ -283,6 +290,20 @@ class IndexUpdateJob(Job):
         yield self._finalize
 
     def _plan(self) -> None:
+        # One-time eviction of dead rows (move/delete / purge / archive)
+        # left in indexes built before the ingest fix. Idempotent (meta
+        # flag), so this is a cheap no-op on every startup after the
+        # first. Runs here — the first chunk of the startup refresh —
+        # so it never blocks a UI-thread open(); the query filter hides
+        # the rows in the meantime regardless.
+        try:
+            purged = self._index.purge_gone_at_head()
+            if purged:
+                self._index.set_meta(
+                    "gone_at_head_purged_count", str(purged),
+                )
+        except Exception:  # noqa: BLE001 — migration must never break startup
+            pass
         # Read current cursor & server head.
         last_raw = self._index.get_meta("last_indexed_change") or "0"
         try:
@@ -338,7 +359,10 @@ class IndexUpdateJob(Job):
             df = r.get("depotFile")
             if not df:
                 continue
-            if action == "delete":
+            # A gone-at-head delta (incl. ``move/delete`` — the old
+            # path of a rename) must REMOVE the path from the index,
+            # not upsert it as live.
+            if is_deleted_at_head(action):
                 deletes.append(str(df))
             else:
                 upserts.append(r)

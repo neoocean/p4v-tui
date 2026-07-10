@@ -96,11 +96,23 @@ async def _wait_until(pilot, predicate, tries=160):
 
 
 def _isolated_home(tmp_path, monkeypatch):
-    """Point HOME at a throwaway dir so no real ~/.p4v-tui state is touched."""
+    """Point HOME at a throwaway dir so no real ~/.p4v-tui state is touched.
+
+    Critically, ``p4v_tui.state.STATE_PATH`` is bound from ``Path.home()``
+    *at import time*, so setting ``$HOME`` after the module is imported
+    does NOT redirect ``save_state`` — without the explicit STATE_PATH
+    monkeypatch below, a test that persists UI state (e.g. a saved CL
+    filter) would write to the developer's real ``~/.p4v-tui/state.json``
+    and, worse, that persisted filter would then break every later test's
+    pending-list rendering. Patch the resolved path directly.
+    """
     home = tmp_path / "home"
     home.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("P4V_BACKEND", raising=False)
+    import p4v_tui.state as _state
+    monkeypatch.setattr(
+        _state, "STATE_PATH", home / ".p4v-tui" / "state.json")
 
 
 def _fresh_permalink_registry(app, tmp_path):

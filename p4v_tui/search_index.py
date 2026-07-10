@@ -286,6 +286,45 @@ class SearchIndex:
             )
         return len(depot_paths)
 
+    # --- migration ------------------------------------------------------
+
+    # Meta flag marking the one-time gone-at-head purge as done, so the
+    # full-table scan it needs (``head_action`` is unindexed) runs once
+    # per index rather than every startup.
+    _PURGE_FLAG = "gone_at_head_purged"
+
+    def purge_gone_at_head(self) -> int:
+        """One-time cleanup of dead rows from indexes built before the
+        ``move/delete`` ingest fix.
+
+        Older builds filtered only plain ``action == "delete"`` on
+        ingest, so ``move/delete`` (the old path of a rename),
+        ``purge`` and ``archive`` rows were stored as if live — on a
+        busy depot that is the *majority* of head actions. The query
+        filter already hides them, but they still cost disk and slow
+        every scan, so this evicts them for good. Idempotent: guarded by
+        the ``_PURGE_FLAG`` meta key, so it scans at most once per index.
+        Returns the number of rows deleted (0 if already run).
+
+        Mirrors :func:`search_jobs.is_deleted_at_head`; the ``files_ad``
+        trigger keeps ``files_fts`` in sync on each DELETE.
+        """
+        self.open()
+        if self.get_meta(self._PURGE_FLAG):
+            return 0
+        with self._conn:
+            cur = self._conn.execute(
+                "DELETE FROM files WHERE head_action LIKE '%/delete' "
+                "   OR head_action IN ('delete', 'purge', 'archive')"
+            )
+            deleted = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+            self._conn.execute(
+                "INSERT INTO meta(key, value) VALUES(?, '1') "
+                "ON CONFLICT(key) DO UPDATE SET value='1'",
+                (self._PURGE_FLAG,),
+            )
+        return deleted
+
     # --- query ----------------------------------------------------------
 
     @staticmethod
@@ -331,11 +370,16 @@ class SearchIndex:
         needle, case_i = self._smart_case_lower(q)
         lower_needle = needle.lower()
         slab_limit = max(int(limit) * 5, int(limit))
+        # Exclude gone-at-head rows — SQL mirror of
+        # ``search_jobs.is_deleted_at_head``. Plain ``!= 'delete'`` let
+        # ``move/delete`` (renamed-away old paths) / ``purge`` /
+        # ``archive`` leak as live hits, and any index built before that
+        # fix still carries them, so the query stays defensive too.
         sql = (
             "SELECT depot_path, head_time, head_user, head_action, type "
             "FROM files "
             "WHERE lower LIKE '%' || ? || '%' "
-            "  AND (head_action IS NULL OR head_action != 'delete') "
+            "  AND (head_action IS NULL OR (head_action NOT LIKE '%/delete' AND head_action NOT IN ('delete', 'purge', 'archive'))) "
             "ORDER BY head_time DESC "
             "LIMIT ?"
         )
@@ -497,7 +541,7 @@ class SearchIndex:
             clauses.append("LOWER(type) LIKE '%' || ? || '%'")
             args.append(ftype.lower())
         clauses.append(
-            "(head_action IS NULL OR head_action != 'delete')"
+            "(head_action IS NULL OR (head_action NOT LIKE '%/delete' AND head_action NOT IN ('delete', 'purge', 'archive')))"
         )
         sql = (
             "SELECT depot_path, head_time, head_user, head_action, "
@@ -596,7 +640,7 @@ class SearchIndex:
         sql = (
             "SELECT depot_path, head_time, head_user, head_action, type "
             f"FROM files WHERE {conds} "
-            "  AND (head_action IS NULL OR head_action != 'delete') "
+            "  AND (head_action IS NULL OR (head_action NOT LIKE '%/delete' AND head_action NOT IN ('delete', 'purge', 'archive'))) "
             "ORDER BY head_time DESC LIMIT ?"
         )
         slab = int(limit) * 5

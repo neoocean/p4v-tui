@@ -23,8 +23,9 @@ from textual.binding import Binding
 from textual.containers import Container, Horizontal, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
-    Button, Input, Label, Select, Static, TabbedContent, TabPane,
+    Button, Input, Label, OptionList, Select, Static, TabbedContent, TabPane,
 )
+from textual.widgets.option_list import Option
 
 from ..chunking import (
     ChunkingConfig, ChunkingStrategy, VALID_MODES,
@@ -34,6 +35,7 @@ from ..config import (
     Config, ConnectionConfig, SwarmConfig,
     default_config_path, write_config,
 )
+from .profile_edit_modal import ProfileEditModal
 
 
 _CHUNKING_JOB_KINDS = ("sync", "force_sync", "revert", "reconcile", "clean")
@@ -80,6 +82,12 @@ class PreferencesModal(ModalScreen[Optional[Config]]):
     def __init__(self, current: Config) -> None:
         super().__init__()
         self._current = current
+        # Editable working copy of the [[profile]] list — mutated by the
+        # Profiles tab (Add / Edit / Delete) and folded into the saved
+        # Config. A copy so Cancel leaves the live config untouched.
+        self._profiles_working: list[ConnectionConfig] = list(
+            current.profiles
+        )
         # Save target: prefer the file we loaded from; else default.
         self._target_path: Path = (
             current.source if current.source is not None
@@ -96,6 +104,8 @@ class PreferencesModal(ModalScreen[Optional[Config]]):
             with TabbedContent(initial="tab_connection"):
                 with TabPane("Connection", id="tab_connection"):
                     yield from self._compose_connection_tab(cfg)
+                with TabPane("Profiles", id="tab_profiles"):
+                    yield from self._compose_profiles_tab(cfg)
                 with TabPane("Swarm", id="tab_swarm"):
                     yield from self._compose_swarm_tab(cfg)
                 with TabPane("Chunking", id="tab_chunking"):
@@ -117,7 +127,7 @@ class PreferencesModal(ModalScreen[Optional[Config]]):
                 yield Static(
                     f"  Note: {len(cfg.profiles)} [[profile]] entries are "
                     "active in your config; they take precedence over "
-                    "[connection]. The picker still uses them.",
+                    "[connection]. Edit them in the Profiles tab.",
                     classes="hint",
                 )
             conn = cfg.connection or ConnectionConfig()
@@ -133,6 +143,97 @@ class PreferencesModal(ModalScreen[Optional[Config]]):
             yield Label("Charset", classes="field")
             yield Input(value=conn.charset or "", id="conn_charset",
                         placeholder="utf8")
+
+    def _compose_profiles_tab(self, cfg: Config) -> ComposeResult:
+        with VerticalScroll():
+            yield Static(
+                "Multi-server connection profiles ([[profile]]). The "
+                "startup picker offers one row per profile; they take "
+                "precedence over [connection]. Changes take effect on "
+                "next launch.",
+                classes="hint",
+            )
+            yield OptionList(id="profiles_list")
+            with Horizontal(id="profile_buttons"):
+                yield Button("Add", id="profile_add")
+                yield Button("Edit", id="profile_edit")
+                yield Button("Delete", id="profile_delete", variant="error")
+
+    def on_mount(self) -> None:
+        self._refresh_profiles_list()
+
+    @staticmethod
+    def _profile_label(p: ConnectionConfig) -> str:
+        name = p.name or "(unnamed)"
+        bits = [b for b in (p.port, p.user, p.client) if b]
+        detail = f"  ({', '.join(bits)})" if bits else ""
+        return f"{name}{detail}"
+
+    def _refresh_profiles_list(self) -> None:
+        try:
+            ol = self.query_one("#profiles_list", OptionList)
+        except Exception:  # noqa: BLE001 — tab not mounted yet
+            return
+        prev = ol.highlighted
+        ol.clear_options()
+        if not self._profiles_working:
+            ol.add_option(Option("(no profiles — Add one)", disabled=True))
+        else:
+            for p in self._profiles_working:
+                ol.add_option(Option(self._profile_label(p)))
+            # Keep the cursor in range after add/delete.
+            if prev is not None:
+                ol.highlighted = min(prev, len(self._profiles_working) - 1)
+            else:
+                ol.highlighted = 0
+
+    def _selected_profile_index(self) -> int | None:
+        try:
+            ol = self.query_one("#profiles_list", OptionList)
+        except Exception:  # noqa: BLE001
+            return None
+        idx = ol.highlighted
+        if idx is None or not self._profiles_working:
+            return None
+        if 0 <= idx < len(self._profiles_working):
+            return idx
+        return None
+
+    def _add_profile(self) -> None:
+        def done(profile: Optional[ConnectionConfig]) -> None:
+            if profile is not None:
+                self._profiles_working.append(profile)
+                self._refresh_profiles_list()
+
+        self.app.push_screen(ProfileEditModal(adding=True), done)
+
+    def _edit_profile(self) -> None:
+        idx = self._selected_profile_index()
+        if idx is None:
+            self.app.notify("Select a profile to edit.", timeout=3)
+            return
+
+        def done(profile: Optional[ConnectionConfig]) -> None:
+            if profile is not None:
+                self._profiles_working[idx] = profile
+                self._refresh_profiles_list()
+
+        self.app.push_screen(
+            ProfileEditModal(self._profiles_working[idx]), done,
+        )
+
+    def _delete_profile(self) -> None:
+        idx = self._selected_profile_index()
+        if idx is None:
+            self.app.notify("Select a profile to delete.", timeout=3)
+            return
+        removed = self._profiles_working.pop(idx)
+        self._refresh_profiles_list()
+        self.app.notify(
+            f"Removed profile: {self._profile_label(removed)} "
+            "(Save to persist).",
+            timeout=4,
+        )
 
     def _compose_swarm_tab(self, cfg: Config) -> ComposeResult:
         with VerticalScroll():
@@ -206,7 +307,13 @@ class PreferencesModal(ModalScreen[Optional[Config]]):
         bid = event.button.id
         if bid == "save":
             self._save_and_dismiss()
-        else:
+        elif bid == "profile_add":
+            self._add_profile()
+        elif bid == "profile_edit":
+            self._edit_profile()
+        elif bid == "profile_delete":
+            self._delete_profile()
+        elif bid == "cancel":
             self.dismiss(None)
 
     def action_cancel(self) -> None:
@@ -290,7 +397,7 @@ class PreferencesModal(ModalScreen[Optional[Config]]):
 
         return Config(
             connection=conn,
-            profiles=list(self._current.profiles),  # not editable here
+            profiles=list(self._profiles_working),  # edited in Profiles tab
             swarm=swarm,
             chunking=ChunkingConfig(default=default_strat,
                                     per_job=per_job),

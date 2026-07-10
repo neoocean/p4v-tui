@@ -1,10 +1,13 @@
 """Main P4V-TUI application."""
 from __future__ import annotations
 
+import time
+from collections import deque
 from datetime import datetime
 from typing import Any
 
 from textual import work
+from textual.worker import get_current_worker
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -13,6 +16,7 @@ from textual.widgets import (
     DataTable,
     Footer,
     Header,
+    Input,
     Static,
     TabbedContent,
     TabPane,
@@ -39,6 +43,12 @@ from .bulk_jobs import (
     ChunkedCleanJob,
     ChunkedReconcileJob,
     ChunkedRevertJob,
+    CleanFilesJob,
+    ReconcileFilesJob,
+)
+from .cl_table_filter import CLTableView, apply_view
+from .image_preview import (
+    detect_image_type, image_caption, render_hex, render_image,
 )
 from .shared_state_cl import SharedStateChangelist
 from .state import load_state, save_state
@@ -89,6 +99,7 @@ from .widgets.tree_filter_overlay import TreeFilterOverlay
 from .widgets.workspace_tree import WorkspaceTree
 
 from . import narrow_nav
+from . import perf_feel
 
 from .app_shared import (
     DEFAULT_AUTO_REFRESH_PENDING_SEC,
@@ -102,6 +113,7 @@ from .app_shared import (
     MIN_LEFT_WIDTH,
     MIN_LOG_HEIGHT,
     NARROW_TERMINAL_WIDTH,
+    SHORT_TERMINAL_HEIGHT,
     ConnectionBar,
     _truncate_workspace,
 )
@@ -125,6 +137,9 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         Binding("f5", "refresh", "Refresh"),
         Binding("f2", "show_cmd_monitor", "Commands"),
         Binding("f3", "toggle_narrow_panels", "Panels"),
+        # Pin the layout: auto (by width) / narrow / wide. Lets a
+        # thin-but-wide tmux pane force the single-page navigator.
+        Binding("ctrl+shift+n", "cycle_layout_mode", "Layout"),
         # Phone-friendly alias for F3. iPhone Blink / iSH / SSH apps
         # often expose Ctrl combos but not function keys. Ctrl+W
         # mirrors the vim / tmux "switch window" idiom and stays
@@ -201,6 +216,12 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
     # In narrow mode the right pane is hidden and the tree fills the
     # screen — useful for iPhone Blink and similar small terminals.
     narrow_mode = reactive(False)
+    # Auto-toggled when the terminal is shorter than SHORT_TERMINAL_HEIGHT
+    # rows. In the wide layout this collapses the bottom Log panel so the
+    # tree / tables aren't crowded by the ~10-row Log strip on a short
+    # viewport (the command history is still reachable via F2). No effect
+    # in narrow mode, where the Log already lives on its own page.
+    short_mode = reactive(False)
     # In narrow mode the layout collapses to a single full-screen "page"
     # navigator (see ``narrow_nav``). ``narrow_page`` is the visible page:
     # one of tree / pending / history / submitted / log. Ctrl+→ / Ctrl+←
@@ -301,14 +322,65 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         self._last_detail_change: str | None = None
         self._last_detail_desc: str = ""
         self._last_detail_files: list[dict] = []
+        # Pending / Submitted table filter+sort views (pure model in
+        # cl_table_filter). Restored from state.json so a configured
+        # filter survives a relaunch. Raw rows are cached so re-applying
+        # a view re-renders without another `p4 changes` round trip.
+        self._pending_view = CLTableView.from_dict(
+            self._ui_state.get("pending_table_view")
+        )
+        self._submitted_view = CLTableView.from_dict(
+            self._ui_state.get("submitted_table_view")
+        )
+        self._last_pending_rows: list[dict] = []
+        self._last_pending_default_files: list[dict] = []
+        self._last_submitted_rows: list[dict] = []
+        # Last History rows, cached so a narrow⇄wide layout flip can
+        # re-render the table (with the new column profile) without
+        # re-hitting the server. None until History is first loaded.
+        self._last_history_rows: list | None = None
+        # Debounce counter for on_tree_node_highlighted → history load.
+        # Each highlight increments this; the timer callback only starts
+        # the load when its captured value still matches.
+        self._history_highlight_seq: int = 0
         # Narrow-mode navigator: the most recently visited non-tree page,
         # so the F3 / Ctrl+W quick-toggle can flip back to where the user
         # was instead of always defaulting to Pending.
         self._narrow_last_panel: str = narrow_nav.DEFAULT_PANEL_PAGE
+        # The page we were on when narrow mode was last left. Restored on
+        # re-entry so a phone rotation (portrait → landscape → portrait)
+        # doesn't dump the user back on the tree every time.
+        self._narrow_resume_page: str = "tree"
+        # Layout pin: auto (decide by width) / narrow / wide. Seeded from
+        # config, togglable at runtime via Ctrl+Shift+N.
+        self._layout_mode: str = narrow_nav.normalize_layout_mode(
+            getattr(self.config.narrow, "layout", "auto"))
+        # In-flight activity registry (perceived-performance indicator).
+        # Maps a monotonically increasing id -> (label, start_monotonic)
+        # for each interactive load currently running. Only mutated on
+        # the UI thread (workers call _begin/_end via call_from_thread);
+        # the animation timer reads it to drive the ConnectionBar activity suffix.
+        self._activity: dict[int, tuple[str, float]] = {}
+        self._activity_seq: int = 0
+        self._activity_tick: int = 0
+        self._activity_timer = None
+        # Recent pending-load wall-clock latencies (ms), newest last.
+        # Feeds the adaptive auto-refresh cadence (perf_feel) so a slow
+        # link backs the refresh off instead of contending with the
+        # user's foreground calls. deque.append is atomic in CPython, so
+        # the worker can record while the UI thread reads.
+        self._recent_latencies_ms: deque = deque(maxlen=8)
+        # Last good connection info, kept so the reconnect handler can
+        # restore the ConnectionBar after a recovered stall.
+        self._p4_info: P4Info | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield ConnectionBar(" Connecting…", id="conn_bar")
+        # Narrow-mode "you are here" page indicator. Hidden in the wide
+        # layout (every pane is visible there); shown + updated by
+        # _update_breadcrumb whenever the navigator page changes.
+        yield Static("", id="narrow_breadcrumb")
         with Horizontal(id="main"):
             with Vertical(id="left_pane"):
                 with TabbedContent(initial="tab_depot", id="left_tabs"):
@@ -352,6 +424,9 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         yield HorizontalSplitter(id="log_splitter")
         yield LogPanel(self.cmd_log, id="log_panel")
         yield Footer()
+        # Narrow-mode curated key hints. Replaces the default Footer (too
+        # wide for a phone) while narrow_mode is on; hidden otherwise.
+        yield Static("", id="narrow_footer")
 
     # --- exception routing --------------------------------------------
 
@@ -433,19 +508,32 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         # client it's rendered plain; for another of the user's clients
         # it's rendered in a dim/italic style with a "↗" prefix on the
         # Change cell so the row is visually distinct at a glance.
-        self.query_one("#pending_table", DataTable).add_columns(
-            "Change", "Workspace", "User", "Date", "Description")
-        self.query_one("#submitted_table", DataTable).add_columns(
-            "Change", "User", "Date", "Description")
-        self.query_one("#history_table", DataTable).add_columns(
-            "Rev", "Change", "Action", "Date", "User", "Description")
+        # Pending / Submitted / History columns are layout-responsive and
+        # rebuilt by their render methods (narrow mode trims to fit a
+        # phone — see narrow_nav.column_headers). Seed them here for the
+        # current mode so an empty table still shows headers before the
+        # first data load.
+        self._set_table_columns(
+            "#pending_table", narrow_nav.column_headers(
+                "pending", self.narrow_mode))
+        self._set_table_columns(
+            "#submitted_table", narrow_nav.column_headers(
+                "submitted", self.narrow_mode))
+        self._set_table_columns(
+            "#history_table", narrow_nav.column_headers(
+                "history_file", self.narrow_mode))
         self.query_one("#detail_files", DataTable).add_columns(
             "File", "Rev", "Action", "Type")
         self.jobs.start(on_progress=self._on_job_progress)
         # Set narrow mode based on initial terminal size — on_resize
-        # might not fire at startup on every Textual version.
+        # might not fire at startup on every Textual version. Honours
+        # the layout pin (config / runtime toggle); re-seed the pin from
+        # config here so a config set after construction still applies.
         try:
-            self.narrow_mode = self.size.width < NARROW_TERMINAL_WIDTH
+            self._layout_mode = narrow_nav.normalize_layout_mode(
+                getattr(self.config.narrow, "layout", "auto"))
+            self._recompute_narrow_mode(self.size.width)
+            self.short_mode = self.size.height < SHORT_TERMINAL_HEIGHT
         except Exception:  # noqa: BLE001
             pass
         # Apply persisted pane sizes to the actual widgets. The
@@ -501,9 +589,10 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             pass
         try:
             # In narrow mode the navigator owns the log panel's height
-            # (hidden on tree/panel pages, 1fr on the log page); don't
-            # stomp it with the persisted wide-mode height.
-            if not self.narrow_mode:
+            # (hidden on tree/panel pages, 1fr on the log page); on a
+            # short terminal the panel is collapsed out entirely. Either
+            # way, don't stomp it with the persisted wide-mode height.
+            if not self.narrow_mode and not self.short_mode:
                 self.query_one("#log_panel").styles.height = (
                     self.log_panel_height
                 )
@@ -886,6 +975,17 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
 
     def _on_connected(self, info: P4Info, login: dict | None) -> None:
         self.query_one(ConnectionBar).update_info(info)
+        # Stash the good connection line + wire the reconnect callbacks so
+        # a mid-command reconnect surfaces in the bar ("⟳ Reconnecting…")
+        # and clears itself on recovery (perceived performance — a stall
+        # the resilient runner is working through reads as "working on it"
+        # rather than "hung").
+        self._p4_info = info
+        try:
+            self.p4._on_retry = self._p4_on_retry
+            self.p4._on_recover = self._p4_on_recover
+        except Exception:  # noqa: BLE001
+            pass
         # Backend identity goes to the LogPanel first — so when a
         # report says "this worked in P4Python but not CLI" we always
         # have a scrollback line confirming which one was active.
@@ -997,25 +1097,48 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
     def _start_pending_auto_refresh(self) -> None:
         if self._pending_auto_refresh_timer is not None:
             return
-        interval = self._pending_auto_refresh_interval()
-        if interval <= 0:
+        if self._pending_auto_refresh_interval() <= 0:
             return
-        self._pending_auto_refresh_timer = self.set_interval(
-            float(interval), self._tick_pending_auto_refresh,
+        self._schedule_next_pending_refresh()
+
+    def _schedule_next_pending_refresh(self) -> None:
+        """Arm the next auto-refresh tick at an adaptive interval.
+
+        A single self-rescheduling ``set_timer`` (rather than a fixed
+        ``set_interval``) so each tick can stretch the gap on a slow
+        link: ``perf_feel.next_refresh_interval`` scales the configured
+        base by recent pending-load latency. ``min_sec == base`` means
+        we never refresh *faster* than configured — only back off — and
+        the stretch is capped at 4× base (≤ 1 h) so a transient spike
+        can't park the refresh forever.
+        """
+        base = self._pending_auto_refresh_interval()
+        if base <= 0:
+            self._pending_auto_refresh_timer = None
+            return
+        interval = perf_feel.next_refresh_interval(
+            list(self._recent_latencies_ms),
+            float(base),
+            min_sec=float(base),
+            max_sec=float(min(3600, base * 4)),
+        )
+        self._pending_auto_refresh_timer = self.set_timer(
+            interval, self._tick_pending_auto_refresh,
         )
 
     def _tick_pending_auto_refresh(self) -> None:
-        """Fire one auto-refresh, skipping conditions that would
-        either crash (disconnected) or duplicate work (load already
-        in flight)."""
+        """Fire one auto-refresh then arm the next (adaptive) tick.
+
+        Skips the load itself when it would crash (disconnected) or
+        duplicate work (load already in flight), but always reschedules
+        so the loop survives a skipped tick."""
+        self._pending_auto_refresh_timer = None  # this one has fired
         try:
-            if not self.p4.connected:
-                return
+            if self.p4.connected and not self._pending_load_in_flight:
+                self._load_pending()
         except Exception:  # noqa: BLE001
-            return
-        if self._pending_load_in_flight:
-            return
-        self._load_pending()
+            pass
+        self._schedule_next_pending_refresh()
 
     # Guard so multiple overlapping ``_load_pending`` workers don't
     # race on the same DataTable. Set True at the top of the worker
@@ -1027,6 +1150,8 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
     @work(thread=True)
     def _load_pending(self) -> None:
         self._pending_load_in_flight = True
+        tok = self._activity_begin_safe("Loading changelists")
+        _t0 = time.monotonic()
         try:
             # Fetch all of the current user's pending CLs across every
             # workspace they own on this server, not just the currently
@@ -1043,6 +1168,9 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
                 self._render_pending, pending, default_files,
             )
         finally:
+            self._activity_end_safe(tok)
+            self._recent_latencies_ms.append(
+                (time.monotonic() - _t0) * 1000.0)
             self._pending_load_in_flight = False
 
     def _render_pending(
@@ -1055,6 +1183,13 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         # avoids dragging rich.text into the module-level import block
         # for one render path.
         from rich.text import Text
+
+        # Cache the raw rows so a later filter/sort change re-renders
+        # without re-hitting the server. The synthetic "default" row is
+        # not part of this list (it's added unconditionally below); the
+        # filter/sort applies only to the server-returned pending CLs.
+        self._last_pending_rows = list(pending)
+        self._last_pending_default_files = list(default_files)
 
         table = self.query_one("#pending_table", DataTable)
         # Remember which CL (column 0) the cursor was sitting on so we
@@ -1072,7 +1207,11 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             except Exception:  # noqa: BLE001
                 prev_change = None
 
-        table.clear()
+        # Rebuild columns for the active layout (narrow trims to
+        # Change + Description) and clear the rows.
+        narrow = self.narrow_mode
+        self._set_table_columns(
+            "#pending_table", narrow_nav.column_headers("pending", narrow))
         self._pending_desc.clear()
         self._pending_client_by_change.clear()
 
@@ -1085,13 +1224,13 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         if default_files:
             self._pending_desc["default"] = "<default changelist>"
             self._pending_client_by_change["default"] = cur_client
-            table.add_row(
-                "default",
-                cur_client,
-                self.p4.user,
-                "",
-                f"<default changelist — {len(default_files)} file(s)>",
-            )
+            table.add_row(*narrow_nav.select_cells("pending", narrow, {
+                "change": "default",
+                "workspace": cur_client,
+                "user": self.p4.user,
+                "date": "",
+                "desc": f"<default changelist — {len(default_files)} file(s)>",
+            }))
 
         # Sort: local CLs first (so the user's own workspace is at the
         # top of the list, matching the pre-change behavior), then
@@ -1103,6 +1242,10 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             is_remote = row_client != cur_client
             return (1 if is_remote else 0, row_client)
         pending_sorted = sorted(pending, key=_sort_key)
+        # User filter / explicit sort (cl_table_filter). When the view is
+        # the inert default this is a no-op and the local-first grouping
+        # above is preserved exactly as before.
+        pending_sorted = apply_view(pending_sorted, self._pending_view)
 
         for r in pending_sorted:
             change = str(r.get("change", ""))
@@ -1124,26 +1267,36 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             ws_disp = _truncate_workspace(row_client)
             if is_remote:
                 # Whole row dim+italic so the eye treats it as
-                # background context. Workspace cell additionally
-                # gets a bold yellow ↗ marker — that's the
-                # "this CL lives somewhere else" anchor. Plain
-                # ``str(...)`` of a Text returns the raw text, so
-                # existing row[0] lookups (cursor restore, context
-                # menu) keep working unchanged. The displayed name
-                # is truncated so a long workspace like
-                # "team-alpha-document-processor" doesn't blow
-                # out the column — the full name is still on
-                # `_pending_client_by_change` for menu titles and
-                # toasts.
-                table.add_row(
-                    Text(change, style="dim italic"),
-                    Text(f"↗ {ws_disp}", style="yellow bold"),
-                    Text(user, style="dim italic"),
-                    Text(date, style="dim italic"),
-                    Text(desc_first, style="dim italic"),
+                # background context. The "this CL lives somewhere
+                # else" ↗ marker rides on the Workspace cell in the
+                # wide layout; in narrow mode that column is dropped,
+                # so the marker moves onto the Description cell instead.
+                # Cell 0 stays a plain ``Text(change)`` either way —
+                # ``str(row[0])`` must equal the change number for
+                # cursor restore + context-menu lookups, so the ↗ never
+                # goes there. The displayed workspace is truncated (full
+                # name stays on ``_pending_client_by_change`` for menu
+                # titles / toasts).
+                desc_cell = (
+                    Text(f"↗ {desc_first}", style="dim italic")
+                    if narrow
+                    else Text(desc_first, style="dim italic")
                 )
+                table.add_row(*narrow_nav.select_cells("pending", narrow, {
+                    "change": Text(change, style="dim italic"),
+                    "workspace": Text(f"↗ {ws_disp}", style="yellow bold"),
+                    "user": Text(user, style="dim italic"),
+                    "date": Text(date, style="dim italic"),
+                    "desc": desc_cell,
+                }))
             else:
-                table.add_row(change, ws_disp, user, date, desc_first)
+                table.add_row(*narrow_nav.select_cells("pending", narrow, {
+                    "change": change,
+                    "workspace": ws_disp,
+                    "user": user,
+                    "date": date,
+                    "desc": desc_first,
+                }))
 
         # Restore cursor on the same CL if it still exists. If it's
         # gone (submitted / deleted by another client) the cursor
@@ -1204,12 +1357,22 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
 
     @work(thread=True)
     def _load_submitted(self) -> None:
-        rows = self.p4.submitted_changes(max_count=100)
-        self.call_from_thread(self._render_submitted, rows)
+        tok = self._activity_begin_safe("Loading submitted")
+        try:
+            rows = self.p4.submitted_changes(max_count=100)
+            self.call_from_thread(self._render_submitted, rows)
+        finally:
+            self._activity_end_safe(tok)
 
     def _render_submitted(self, rows: list[dict]) -> None:
-        table = self.query_one("#submitted_table", DataTable)
-        table.clear()
+        self._last_submitted_rows = list(rows)
+        narrow = self.narrow_mode
+        table = self._set_table_columns(
+            "#submitted_table",
+            narrow_nav.column_headers("submitted", narrow))
+        if table is None:
+            return
+        rows = apply_view(rows, self._submitted_view)
         for r in rows:
             change = str(r.get("change", ""))
             user = r.get("user", "")
@@ -1221,7 +1384,65 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             desc_first = truncate_cells(
                 first_nonblank_line(r.get("desc", "") or ""), 80,
             )
-            table.add_row(change, user, date, desc_first)
+            table.add_row(*narrow_nav.select_cells("submitted", narrow, {
+                "change": change,
+                "user": user,
+                "date": date,
+                "desc": desc_first,
+            }))
+
+    # --- CL table filter / sort ------------------------------------------
+
+    def open_pending_filter(self) -> None:
+        """Open the filter/sort dialog for the Pending table."""
+        from .widgets.cl_filter_modal import CLFilterModal
+
+        def _done(view) -> None:
+            if view is None:
+                return
+            self._pending_view = view
+            self._ui_state["pending_table_view"] = view.to_dict()
+            save_state(self._ui_state)
+            # Re-render from cached rows — no extra `p4 changes` call.
+            self._render_pending(
+                self._last_pending_rows, self._last_pending_default_files,
+            )
+            self.notify(
+                f"Pending filter: {view.summary()}",
+                severity="information", timeout=4,
+            )
+
+        self.push_screen(
+            CLFilterModal(
+                self._pending_view,
+                table_label="Pending", show_workspace=True,
+            ),
+            _done,
+        )
+
+    def open_submitted_filter(self) -> None:
+        """Open the filter/sort dialog for the Submitted table."""
+        from .widgets.cl_filter_modal import CLFilterModal
+
+        def _done(view) -> None:
+            if view is None:
+                return
+            self._submitted_view = view
+            self._ui_state["submitted_table_view"] = view.to_dict()
+            save_state(self._ui_state)
+            self._render_submitted(self._last_submitted_rows)
+            self.notify(
+                f"Submitted filter: {view.summary()}",
+                severity="information", timeout=4,
+            )
+
+        self.push_screen(
+            CLFilterModal(
+                self._submitted_view,
+                table_label="Submitted", show_workspace=False,
+            ),
+            _done,
+        )
 
     # --- file viewer (Enter on a tree leaf) ------------------------------
 
@@ -1257,29 +1478,67 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             )
             return
         # `p4 print -q` returns the metadata dict followed by content
-        # parts (str for text types, bytes for binary). Concatenate and
-        # decode bytes leniently — replacement chars are fine for the
+        # parts (str for text types, bytes for binary). Keep the raw
+        # bytes (for image / hex preview) *and* a leniently-decoded str
+        # (for the text path) — replacement chars are fine for the
         # binary-detection heuristic below.
         parts: list[str] = []
+        raw = bytearray()
         for item in result:
             if isinstance(item, str):
                 parts.append(item)
+                raw.extend(item.encode("utf-8", errors="replace"))
             elif isinstance(item, (bytes, bytearray)):
+                raw.extend(bytes(item))
                 try:
                     parts.append(bytes(item).decode("utf-8"))
                 except UnicodeDecodeError:
                     parts.append(bytes(item).decode("utf-8", errors="replace"))
         content = "".join(parts)
 
+        # Image files: render half-block ANSI art instead of dumping the
+        # raw bytes as garbage text. Detection is by magic bytes (p4 print
+        # gives us no filename and depot filetypes lie). A decode failure
+        # falls through to the binary summary below.
+        img_type = detect_image_type(bytes(raw))
+        if img_type:
+            try:
+                lines = render_image(bytes(raw))
+                caption = image_caption(bytes(raw), img_type)
+            except Exception as e:  # noqa: BLE001 — Pillow missing/corrupt
+                lines = None
+                self.call_from_thread(
+                    self.notify,
+                    f"이미지 렌더 실패 ({img_type}): {e}",
+                    severity="warning", timeout=6,
+                )
+            if lines is not None:
+                self.call_from_thread(
+                    self.push_screen,
+                    FileViewerModal(
+                        f"{depot_file}  [{caption}]",
+                        "", narrow=True, line_numbers=False,
+                        rendered=lines,
+                    ),
+                )
+                return
+
         # Heuristic: if the first 8KiB has more than 1% NUL bytes, treat
-        # as binary and refuse to render the raw bytes (which would just
-        # be noise). Most text/utf8 files have zero NULs.
+        # as binary. Rather than "cannot display", show a bounded hex
+        # window so the user can still eyeball a header / embedded string.
         sample = content[:8192]
         if sample and sample.count("\x00") > max(1, len(sample) // 100):
-            content = (
-                f"[Binary file — {len(content)} bytes]\n"
-                "Cannot display in text viewer."
+            hex_lines = render_hex(bytes(raw))
+            header = f"[Binary file — {len(raw):,} bytes — hex preview]"
+            self.call_from_thread(
+                self.push_screen,
+                FileViewerModal(
+                    depot_file,
+                    "\n".join([header, ""] + hex_lines),
+                    narrow=True, line_numbers=False,
+                ),
             )
+            return
 
         # narrow=True so the modal sits on the right half of the
         # screen — the left-pane tree stays visible behind it and the
@@ -1309,17 +1568,35 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
                 return
         except Exception:  # noqa: BLE001
             pass
-        if node.allow_expand:
-            # Directory: folder history (one row per CL touching the
-            # subtree). Same target shape as Ctrl+T.
-            self._load_folder_history(f"{path}/...")
-        else:
-            self._load_file_history(path)
+        # Debounce: rapid cursor movement fires many highlight events in
+        # quick succession. Starting a P4 call on every event starves the
+        # thread pool and makes the UI feel frozen. We increment a sequence
+        # counter and only start the load once the cursor settles for 300 ms.
+        self._history_highlight_seq += 1
+        seq = self._history_highlight_seq
+        is_dir = bool(node.allow_expand)
+        target = f"{path}/..." if is_dir else path
+
+        def _deferred_load() -> None:
+            if self._history_highlight_seq != seq:
+                return
+            if is_dir:
+                self._load_folder_history(target)
+            else:
+                self._load_file_history(target)
+
+        self.set_timer(0.3, _deferred_load)
 
     @work(thread=True, exclusive=True, group="history")
     def _load_file_history(self, depot_file: str) -> None:
-        rows = self.p4.filelog(depot_file, max_revs=50)
-        self.call_from_thread(self._render_history, depot_file, rows)
+        tok = self._activity_begin_safe("Loading history")
+        try:
+            rows = self.p4.filelog(depot_file, max_revs=50)
+            w = get_current_worker()
+            if not w.is_cancelled:
+                self.call_from_thread(self._render_history, depot_file, rows)
+        finally:
+            self._activity_end_safe(tok)
 
     # --- folder history (Ctrl+T) ----------------------------------------
 
@@ -1351,42 +1628,52 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
 
     @work(thread=True, exclusive=True, group="history")
     def _load_folder_history(self, target: str) -> None:
+        tok = self._activity_begin_safe("Loading history")
         try:
-            rows = self.p4.run("changes", "-L", "-m", "50", target)
-        except P4Exception:
-            rows = []
-        self.call_from_thread(self._render_folder_history, target, rows)
+            try:
+                rows = self.p4.run("changes", "-L", "-m", "50", target)
+            except P4Exception:
+                rows = []
+            w = get_current_worker()
+            if not w.is_cancelled:
+                self.call_from_thread(self._render_folder_history, target, rows)
+        finally:
+            self._activity_end_safe(tok)
 
-    # The History table swaps its column set depending on whether the
-    # current target is a single file (per-rev rows from
-    # ``p4 filelog`` — Rev / Action are meaningful per row) or a
-    # folder (per-CL rows from ``p4 changes -L`` — neither Rev nor
-    # Action have a per-row value, they're CL-level concepts). p4v
-    # itself leaves the file-history layout but with empty cells;
-    # we'd rather drop the empty columns entirely so the table
-    # doesn't waste two columns of width for blank data.
-    _HISTORY_FILE_COLS = ("Rev", "Change", "Action", "Date", "User",
-                          "Description")
-    _HISTORY_FOLDER_COLS = ("Change", "Date", "User", "Description")
+    def _set_table_columns(self, selector: str, headers):
+        """Point a DataTable's columns at ``headers``, rebuilding lazily.
 
-    def _reset_history_columns(self, is_folder: bool) -> None:
-        table = self.query_one("#history_table", DataTable)
-        # Only rebuild if the schema actually changed — DataTable
-        # tracks columns by an internal key; recreating them on every
-        # render leaks key churn and resets the user's column-width
-        # bookkeeping.
-        desired = (
-            self._HISTORY_FOLDER_COLS if is_folder
-            else self._HISTORY_FILE_COLS
-        )
+        Shared by every layout-responsive table. Rebuilding (when the
+        schema actually changes — different layout or History file/folder
+        switch) clears the rows too, which the caller re-adds. When the
+        schema is unchanged it just clears rows, so DataTable's internal
+        column keys / width bookkeeping survive a plain refresh. Returns
+        the table (or None if it isn't mounted) for caller convenience.
+        """
+        try:
+            table = self.query_one(selector, DataTable)
+        except Exception:  # noqa: BLE001
+            return None
+        desired = tuple(headers)
         current = tuple(
             str(c.label) for c in getattr(table, "columns", {}).values()
         ) if hasattr(table, "columns") else ()
         if current == desired:
             table.clear()
-            return
-        table.clear(columns=True)
-        table.add_columns(*desired)
+        else:
+            table.clear(columns=True)
+            table.add_columns(*desired)
+        return table
+
+    # The History table swaps its column set on two axes: file vs folder
+    # target (filelog has per-row Rev/Action; changes -L doesn't), and
+    # wide vs narrow layout. narrow_nav.column_headers owns both.
+    def _reset_history_columns(self, is_folder: bool) -> None:
+        key = "history_folder" if is_folder else "history_file"
+        self._set_table_columns(
+            "#history_table",
+            narrow_nav.column_headers(key, self.narrow_mode),
+        )
 
     def _render_folder_history(
         self, target: str, rows: list,
@@ -1396,6 +1683,8 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         # can re-fetch the same target on demand.
         self._history_target = target
         self._history_is_folder = True
+        self._last_history_rows = list(rows)
+        narrow = self.narrow_mode
         self._reset_history_columns(is_folder=True)
         table = self.query_one("#history_table", DataTable)
         for r in rows:
@@ -1413,13 +1702,19 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             )
             # Folder schema: Change, Date, User, Description (Rev /
             # Action columns are absent — they don't exist for a
-            # changelist-level row, and leaving them blank just
-            # wasted column width).
-            table.add_row(change, date, user, desc_first)
+            # changelist-level row). Narrow trims to Change + Description.
+            table.add_row(*narrow_nav.select_cells("history_folder", narrow, {
+                "change": change,
+                "date": date,
+                "user": user,
+                "desc": desc_first,
+            }))
 
     def _render_history(self, depot_file: str, rows: list[dict]) -> None:
         self._history_target = depot_file
         self._history_is_folder = False
+        self._last_history_rows = list(rows)
+        narrow = self.narrow_mode
         self._reset_history_columns(is_folder=False)
         table = self.query_one("#history_table", DataTable)
         for r in rows:
@@ -1431,14 +1726,48 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             desc_first = truncate_cells(
                 first_nonblank_line(r.get("desc", "") or ""), 60,
             )
-            table.add_row(
-                f"#{r.get('rev', '')}",
-                r.get("change", ""),
-                r.get("action", ""),
-                date,
-                r.get("user", ""),
-                desc_first,
-            )
+            # File schema: Rev, Change, Action, Date, User, Description.
+            # Narrow trims to Rev + Action + Description.
+            table.add_row(*narrow_nav.select_cells("history_file", narrow, {
+                "rev": f"#{r.get('rev', '')}",
+                "change": r.get("change", ""),
+                "action": r.get("action", ""),
+                "date": date,
+                "user": r.get("user", ""),
+                "desc": desc_first,
+            }))
+
+    def _rerender_tables_for_mode(self) -> None:
+        """Re-render the right-pane tables for the current layout.
+
+        Called on a narrow⇄wide flip so the responsive column profiles
+        update live from the cached rows — no server round-trip. Each
+        table is guarded independently so one that hasn't loaded yet (or
+        fails to render) doesn't block the others.
+        """
+        try:
+            if self._last_pending_rows or self._last_pending_default_files:
+                self._render_pending(
+                    self._last_pending_rows,
+                    self._last_pending_default_files,
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self._last_submitted_rows:
+                self._render_submitted(self._last_submitted_rows)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self._last_history_rows is not None and self._history_target:
+                if self._history_is_folder:
+                    self._render_folder_history(
+                        self._history_target, self._last_history_rows)
+                else:
+                    self._render_history(
+                        self._history_target, self._last_history_rows)
+        except Exception:  # noqa: BLE001
+            pass
 
     # --- file actions ------------------------------------------------------
 
@@ -1471,13 +1800,7 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             )
             return
         if action == "chunked_reconcile":
-            self._enqueue_chunked(
-                ChunkedReconcileJob(
-                    self.p4, target,
-                    strategy=self._chunking_for("reconcile"),
-                ),
-                target,
-            )
+            self._open_reconcile_preview(target, "reconcile")
             return
         if action == "chunked_revert":
             self._confirm_then_enqueue(
@@ -1494,21 +1817,13 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             )
             return
         if action == "chunked_clean":
-            self._confirm_then_enqueue(
-                ChunkedCleanJob(
-                    self.p4, target,
-                    strategy=self._chunking_for("clean"),
-                ),
-                title=f"Clean {target}?",
-                message=(
-                    "Restore locally-modified files and DELETE files unknown "
-                    "to the depot under this subtree. Cannot be undone."
-                ),
-                ok_label="Clean",
-            )
+            self._open_reconcile_preview(target, "clean")
             return
-        if action in ("integrate", "copy", "branch"):
+        if action in ("integrate", "copy"):
             self._open_bci_modal(action, target)
+            return
+        if action == "branch":
+            self._open_branch_flow(target)
             return
         if action == "resolve":
             self._open_resolve_modal(target)
@@ -1603,6 +1918,59 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         "delete": "Mark for delete",
     }
 
+    # Human-facing verb for the in-flight indicator, per file action.
+    # Falls back to the raw action name for anything unlisted.
+    _ACTION_LABELS = {
+        "sync": "Get latest",
+        "get": "Get latest",
+        "edit": "Opening for edit",
+        "add": "Adding",
+        "delete": "Marking for delete",
+        "revert": "Reverting",
+        "lock": "Locking",
+        "unlock": "Unlocking",
+    }
+
+    def _action_label(self, action: str) -> str:
+        return self._ACTION_LABELS.get(
+            action, str(action).replace("_", " ").capitalize())
+
+    # --- optimistic per-row markers (worker-thread safe) ----------------
+
+    def _node_tree(self, node):
+        """The P4Tree owning ``node`` if it exposes the pending API."""
+        tree = getattr(node, "tree", None)
+        if tree is not None and hasattr(tree, "mark_node_pending"):
+            return tree
+        return None
+
+    def _mark_node_pending(self, node) -> None:
+        tree = self._node_tree(node)
+        if tree is not None:
+            tree.mark_node_pending(node)
+
+    def _clear_node_pending(self, node) -> None:
+        tree = self._node_tree(node)
+        if tree is not None:
+            tree.clear_node_pending(node)
+
+    def _mark_node_pending_safe(self, node) -> None:
+        """Marshal _mark_node_pending to the UI thread (no-op if None)."""
+        if node is None:
+            return
+        try:
+            self.call_from_thread(self._mark_node_pending, node)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _clear_node_pending_safe(self, node) -> None:
+        if node is None:
+            return
+        try:
+            self.call_from_thread(self._clear_node_pending, node)
+        except Exception:  # noqa: BLE001
+            pass
+
     @work(thread=True, group="p4_action")
     def _run_file_action(
         self,
@@ -1610,35 +1978,48 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         target: str,
         source_node,
     ) -> None:
-        cl_args: tuple[str, ...] = ()
-        if action in self._ISOLATE_TO_NEW_CL:
+        # Immediate "your action landed" acknowledgment on a laggy link:
+        # the global activity indicator shows e.g. "Opening for edit…",
+        # and the affected row gets an optimistic "⟳" marker — both the
+        # moment the command is dispatched (perceived-performance). The
+        # post-action reload reconciles the row to its real state.
+        tok = self._activity_begin_safe(self._action_label(action))
+        self._mark_node_pending_safe(source_node)
+        try:
+            cl_args: tuple[str, ...] = ()
+            if action in self._ISOLATE_TO_NEW_CL:
+                try:
+                    desc = f"{self._ISOLATE_TO_NEW_CL[action]}: {target}"
+                    new_cl = self.p4.create_changelist(desc)
+                except Exception as e:  # noqa: BLE001
+                    # Bailed before the reconciling reload — clear the
+                    # optimistic marker so the row doesn't stay "⟳".
+                    self._clear_node_pending_safe(source_node)
+                    self.call_from_thread(
+                        self.notify,
+                        f"{action} failed (creating CL): {e}",
+                        severity="error", timeout=10,
+                    )
+                    return
+                cl_args = ("-c", str(new_cl))
             try:
-                desc = f"{self._ISOLATE_TO_NEW_CL[action]}: {target}"
-                new_cl = self.p4.create_changelist(desc)
-            except Exception as e:  # noqa: BLE001
+                result = self.p4.run(action, *cl_args, target)
+                summary = self._summarize_result(result)
                 self.call_from_thread(
                     self.notify,
-                    f"{action} failed (creating CL): {e}",
+                    f"{action} {target} — {summary}"
+                    + (f"  (CL {cl_args[1]})" if cl_args else ""),
+                    timeout=6,
+                )
+            except P4Exception as e:
+                self.call_from_thread(
+                    self.notify,
+                    f"{action} failed: {e}",
                     severity="error", timeout=10,
                 )
-                return
-            cl_args = ("-c", str(new_cl))
-        try:
-            result = self.p4.run(action, *cl_args, target)
-            summary = self._summarize_result(result)
-            self.call_from_thread(
-                self.notify,
-                f"{action} {target} — {summary}"
-                + (f"  (CL {cl_args[1]})" if cl_args else ""),
-                timeout=6,
-            )
-        except P4Exception as e:
-            self.call_from_thread(
-                self.notify,
-                f"{action} failed: {e}",
-                severity="error", timeout=10,
-            )
-        self.call_from_thread(self._refresh_after_action, source_node)
+            self.call_from_thread(self._refresh_after_action, source_node)
+        finally:
+            self._activity_end_safe(tok)
 
     @staticmethod
     def _summarize_result(result: list) -> str:
@@ -2122,6 +2503,116 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
                 ok_label=ok_label, ok_variant="error",
             ),
             callback=on_close,
+        )
+
+    # --- interactive Reconcile / Clean (per-file preview) ---------------
+
+    _RECONCILE_DRYRUN = {
+        "reconcile": ("reconcile", "-n", "-a", "-e", "-d"),
+        "clean": ("clean", "-n"),
+    }
+    _RECONCILE_LABEL = {"reconcile": "Reconcile", "clean": "Clean"}
+
+    @work(thread=True, group="reconcile_preview")
+    def _open_reconcile_preview(self, target: str, op: str) -> None:
+        """Run the dry-run, then open the per-file picker on the UI thread.
+
+        p4v previews the add/edit/delete set and lets you check files
+        before reconciling/cleaning. We get the same set from
+        ``reconcile -n`` / ``clean -n`` (no mutation), parse it with the
+        pure :mod:`reconcile_preview`, and hand it to the picker. A
+        benign "no file(s)" result is reported as "nothing to do".
+        """
+        from .reconcile_preview import parse_preview
+
+        argv = self._RECONCILE_DRYRUN[op]
+        try:
+            rows = self.p4.run(*argv, target)
+        except P4Exception as e:
+            msg = str(e).lower()
+            if "no file(s)" in msg or "no such file" in msg:
+                rows = []
+            else:
+                self.call_from_thread(
+                    self.notify, f"Preview failed: {e}",
+                    severity="error", timeout=8,
+                )
+                return
+        entries = parse_preview(rows)
+        if not entries:
+            self.call_from_thread(
+                self.notify,
+                f"Nothing to {op} under {target}.",
+                severity="information", timeout=4,
+            )
+            return
+        self.call_from_thread(self._show_reconcile_picker, target, op, entries)
+
+    def _show_reconcile_picker(self, target: str, op: str, entries) -> None:
+        from .widgets.reconcile_picker_modal import ReconcilePickerModal
+
+        label = self._RECONCILE_LABEL[op]
+        total = len(entries)
+
+        def on_close(selected) -> None:
+            if not selected:
+                return
+            all_selected = len(selected) == total
+            self._run_reconcile_selection(
+                target, op, selected, all_selected, entries,
+            )
+
+        self.push_screen(
+            ReconcilePickerModal(label, target, entries), on_close,
+        )
+
+    def _run_reconcile_selection(
+        self, target: str, op: str, selected: list[str],
+        all_selected: bool, entries,
+    ) -> None:
+        """Dispatch the picked selection to the right job.
+
+        All files selected → the original all-or-nothing subdir job
+        (preserves the "delete unknown local file" walk semantics and
+        honours the configured chunking). A subset → the explicit-files
+        job on exactly the picked client paths.
+        """
+        if op == "reconcile":
+            if all_selected:
+                self._enqueue_chunked(
+                    ChunkedReconcileJob(
+                        self.p4, target,
+                        strategy=self._chunking_for("reconcile"),
+                    ),
+                    target,
+                )
+            else:
+                self._enqueue_chunked(
+                    ReconcileFilesJob(self.p4, selected), target,
+                )
+            return
+
+        # clean — destructive, confirm first (count the deletes so the
+        # message states the actual blast radius).
+        deletes = sum(
+            1 for e in entries
+            if e.spec in set(selected) and e.action.startswith("delete")
+        )
+        if all_selected:
+            job: Job = ChunkedCleanJob(
+                self.p4, target, strategy=self._chunking_for("clean"),
+            )
+        else:
+            job = CleanFilesJob(self.p4, selected)
+        self._confirm_then_enqueue(
+            job,
+            title=f"Clean {len(selected)} file(s) under {target}?",
+            message=(
+                f"Restore locally-modified files and DELETE "
+                f"{deletes} local file(s) unknown to the depot. "
+                "Cannot be undone."
+            ),
+            ok_label="Clean",
         )
 
     # --- "View Submitted/Pending Changelist" -- switch tab + select row -
@@ -3934,6 +4425,10 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             if isinstance(ran, dict) and ran.get("merge"):
                 self._run_3way_merge(ran["merge"])
                 return
+            # Ctrl+T hands one file to the external merge tool.
+            if isinstance(ran, dict) and ran.get("merge_tool"):
+                self._run_external_merge(ran["merge_tool"])
+                return
             if ran:
                 # Resolve actions touch open files; refresh the
                 # workspace tree + pending list so status overlays /
@@ -4107,6 +4602,184 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             timeout=7,
         )
         self.call_from_thread(self._refresh_after_action, None)
+
+    @work(thread=True, group="merge_external")
+    def _run_external_merge(self, target: str) -> None:
+        """Resolve ``target`` via the configured external merge tool.
+
+        Same marker choreography as :meth:`_run_3way_merge` (auto-merge →
+        detect conflict → snapshot yours → ``-af`` to emit markers →
+        parse), but instead of the in-app editor it writes the three
+        sides to temp files, **blocks** on the external tool, then reads
+        the merged ``{merge}`` file back and accepts it (the file is
+        already marked resolved by ``-af``, so its workspace content
+        submits). Cancel / non-zero exit restores your version.
+        """
+        import os
+        import tempfile
+        from .merge3 import conflicts, has_conflicts, parse_conflict_markers, \
+            reconstruct, BASE, THEIRS, YOURS
+        from . import fs_actions
+
+        tool = self.config.merge_tool if self.config else None
+        if not tool or not tool.command:
+            self.call_from_thread(
+                self.notify,
+                "No [merge_tool] configured. Set command in p4v-tui.toml "
+                "(Preferences), or use Ctrl+E for the in-app merge editor.",
+                severity="warning", timeout=8,
+            )
+            return
+
+        # 1. clean auto-merge attempt.
+        try:
+            self.p4.run("resolve", "-am", target)
+        except P4Exception:
+            pass
+        # 2. locate local file.
+        try:
+            info = self.p4.where(target) or {}
+            local = info.get("path") or info.get("clientFile")
+        except Exception:  # noqa: BLE001
+            local = None
+        if not local or not os.path.exists(local):
+            self.call_from_thread(
+                self.notify, f"Can't locate the local file for {target}.",
+                severity="error", timeout=8,
+            )
+            return
+        # 3. still conflicted?
+        try:
+            pending = self.p4.run("resolve", "-n", target)
+            conflicted = any(isinstance(r, dict) for r in pending)
+        except Exception:  # noqa: BLE001
+            conflicted = False
+        if not conflicted:
+            self.call_from_thread(
+                self.notify,
+                f"{target}: auto-merged cleanly — nothing to hand-merge.",
+                timeout=5,
+            )
+            self.call_from_thread(self._refresh_after_action, None)
+            return
+        # 4. snapshot yours, emit markers, parse.
+        try:
+            with open(local, encoding="utf-8", errors="replace") as fh:
+                yours_snapshot = fh.read()
+        except OSError as e:
+            self.call_from_thread(
+                self.notify, f"Read failed: {e}", severity="error", timeout=8,
+            )
+            return
+        try:
+            self.p4.run("resolve", "-af", target)
+            with open(local, encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+        except (P4Exception, OSError) as e:
+            self.call_from_thread(
+                self.notify, f"Preparing merge failed: {e}",
+                severity="error", timeout=10,
+            )
+            return
+        segs = parse_conflict_markers(content)
+        if not has_conflicts(segs):
+            self._restore_merge_file(local, yours_snapshot)
+            self.call_from_thread(
+                self.notify, f"{target}: no conflict hunks to merge.",
+                timeout=5,
+            )
+            return
+
+        # 5. Reconstruct the three full sides (one uniform choice each)
+        #    into temp files; seed the result file with "yours".
+        n = len(conflicts(segs))
+        base_text = reconstruct(segs, [BASE] * n)
+        theirs_text = reconstruct(segs, [THEIRS] * n)
+        yours_text = reconstruct(segs, [YOURS] * n)
+        suffix = os.path.splitext(local)[1] or ".txt"
+        tmpdir = tempfile.mkdtemp(prefix="p4vtui-merge-")
+        paths = {
+            "base": os.path.join(tmpdir, f"BASE{suffix}"),
+            "theirs": os.path.join(tmpdir, f"THEIRS{suffix}"),
+            "yours": os.path.join(tmpdir, f"YOURS{suffix}"),
+            "merge": os.path.join(tmpdir, f"MERGED{suffix}"),
+        }
+        try:
+            for key, text in (("base", base_text), ("theirs", theirs_text),
+                              ("yours", yours_text), ("merge", yours_text)):
+                with open(paths[key], "w", encoding="utf-8") as fh:
+                    fh.write(text)
+        except OSError as e:
+            self._restore_merge_file(local, yours_snapshot)
+            self.call_from_thread(
+                self.notify, f"Writing merge temp files failed: {e}",
+                severity="error", timeout=8,
+            )
+            return
+
+        self.call_from_thread(
+            self.notify,
+            f"Launching {tool.name} — finish + save in the tool, "
+            "then close it to apply.",
+            timeout=6,
+        )
+        # 6. Block on the tool (we're on a worker thread).
+        try:
+            rc = fs_actions.run_merge_tool(
+                tool.command, tool.args,
+                base=paths["base"], theirs=paths["theirs"],
+                yours=paths["yours"], merge=paths["merge"],
+            )
+        except FileNotFoundError:
+            self._restore_merge_file(local, yours_snapshot)
+            self.call_from_thread(
+                self.notify,
+                f"Merge tool not found: {tool.command!r}. Check "
+                "[merge_tool] command in Preferences.",
+                severity="error", timeout=10,
+            )
+            self._rmtree_quiet(tmpdir)
+            return
+        except (ValueError, OSError) as e:
+            self._restore_merge_file(local, yours_snapshot)
+            self.call_from_thread(
+                self.notify, f"Merge tool failed: {e}",
+                severity="error", timeout=10,
+            )
+            self._rmtree_quiet(tmpdir)
+            return
+
+        # 7. Apply the merged result (or restore yours on cancel).
+        try:
+            with open(paths["merge"], encoding="utf-8",
+                      errors="replace") as fh:
+                merged = fh.read()
+        except OSError:
+            merged = None
+        if rc == 0 and merged is not None:
+            self._restore_merge_file(local, merged)
+            self.call_from_thread(
+                self.notify, f"Merged and resolved {target} via {tool.name}.",
+                timeout=6,
+            )
+        else:
+            self._restore_merge_file(local, yours_snapshot)
+            self.call_from_thread(
+                self.notify,
+                f"Merge tool exited {rc} — kept your version of {target} "
+                "(resolved as yours; use Re-resolve to redo).",
+                timeout=7,
+            )
+        self._rmtree_quiet(tmpdir)
+        self.call_from_thread(self._refresh_after_action, None)
+
+    @staticmethod
+    def _rmtree_quiet(path: str) -> None:
+        import shutil
+        try:
+            shutil.rmtree(path, ignore_errors=True)
+        except Exception:  # noqa: BLE001
+            pass
 
     @work(thread=True, group="resolve_check")
     def _check_resolve_after_bci(self, target: str, op: str) -> None:
@@ -4510,6 +5183,133 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         if operation in ("integrate", "copy"):
             self._check_resolve_after_bci(target, operation)
 
+    # --- Branch Files (populate) — mapping picker + preview + submit ----
+
+    def _open_branch_flow(self, target: str = "") -> None:
+        """Branch Files entry point: offer a branch-mapping picker first,
+        then the source/target dialog, then a dry-run preview before the
+        (auto-submitting) populate. The cursor path seeds the target."""
+        self._load_branches_then_pick(target)
+
+    @work(thread=True, group="branches")
+    def _load_branches_then_pick(self, target: str) -> None:
+        try:
+            branches = self.p4.run("branches")
+        except P4Exception:
+            branches = []
+        branches = [b for b in branches if isinstance(b, dict)]
+        self.call_from_thread(self._pick_branch_mapping, target, branches)
+
+    def _pick_branch_mapping(self, target: str, branches: list) -> None:
+        from .widgets.branch_picker_modal import BranchPickerModal
+
+        def on_close(choice) -> None:
+            if choice is None:
+                return  # cancelled
+            # choice == "" → manual source/target; else a branch name.
+            self._open_branch_modal(target, branch_spec=choice or "")
+
+        self.push_screen(BranchPickerModal(branches), on_close)
+
+    def _open_branch_modal(self, target: str, *, branch_spec: str = "") -> None:
+        def on_close(result: dict | None) -> None:
+            if not result:
+                return
+            self._preview_then_branch(result)
+
+        self.push_screen(
+            BranchCopyIntegrateModal(
+                "branch", target=target, branch_spec=branch_spec,
+            ),
+            on_close,
+        )
+
+    @work(thread=True, group="bci")
+    def _preview_then_branch(self, result: dict) -> None:
+        """Run ``populate -n`` and open the preview; the real populate only
+        fires after the user confirms (populate auto-submits, so this is
+        the last chance to back out)."""
+        from .branch_files import build_populate_args, parse_populate_preview
+
+        try:
+            argv = build_populate_args(
+                source=result.get("source", ""),
+                target=result.get("target", ""),
+                branch=result.get("branch", ""),
+                description=result.get("description", ""),
+                dry_run=True,
+            )
+        except ValueError as e:
+            self.call_from_thread(
+                self.notify, f"Branch preview failed: {e}",
+                severity="warning", timeout=6,
+            )
+            return
+        try:
+            rows = self.p4.run(*argv)
+        except P4Exception as e:
+            self.call_from_thread(
+                self.notify, f"Branch preview failed: {e}",
+                severity="error", timeout=8,
+            )
+            return
+        files = parse_populate_preview(rows)
+        if not files:
+            self.call_from_thread(
+                self.notify, "Nothing to branch (preview is empty).",
+                severity="information", timeout=5,
+            )
+            return
+        self.call_from_thread(self._show_branch_preview, result, files)
+
+    def _show_branch_preview(self, result: dict, files: list[str]) -> None:
+        from .widgets.branch_preview_modal import BranchPreviewModal
+
+        branch = result.get("branch", "")
+        summary = (
+            f"-b {branch}" if branch
+            else f"{result.get('source', '')} → {result.get('target', '')}"
+        )
+
+        def on_close(proceed: bool) -> None:
+            if proceed:
+                self._run_branch(result)
+
+        self.push_screen(BranchPreviewModal(files, summary), on_close)
+
+    @work(thread=True, group="bci")
+    def _run_branch(self, result: dict) -> None:
+        from .branch_files import build_populate_args
+
+        try:
+            argv = build_populate_args(
+                source=result.get("source", ""),
+                target=result.get("target", ""),
+                branch=result.get("branch", ""),
+                description=result.get("description", ""),
+                dry_run=False,
+            )
+        except ValueError as e:
+            self.call_from_thread(
+                self.notify, f"Branch failed: {e}",
+                severity="warning", timeout=6,
+            )
+            return
+        try:
+            res = self.p4.run(*argv)
+        except P4Exception as e:
+            self.call_from_thread(
+                self.notify, f"Branch failed: {e}",
+                severity="error", timeout=10,
+            )
+            return
+        n = sum(1 for r in res if isinstance(r, dict))
+        self.call_from_thread(
+            self.notify, f"Branched {n} file(s).", timeout=6,
+        )
+        self.call_from_thread(self._load_submitted)
+        self.call_from_thread(self.query_one(WorkspaceTree).refresh_root)
+
     # --- edit changelist description ------------------------------------
 
     def _open_edit_desc_modal(self, change: str, *, force: bool) -> None:
@@ -4876,13 +5676,28 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             )
 
     def watch_narrow_mode(self, value: bool) -> None:
-        # When leaving narrow mode, reset the navigator back to the tree
-        # page — otherwise a stale "log"/"submitted" page silently
-        # confuses the next narrow-mode entry (and would leave the log
-        # panel forced to 1fr / a pane hidden in the wide layout).
-        if not value:
+        if value:
+            # Re-entering narrow mode (e.g. the phone rotated back to
+            # portrait): restore the page the user was on before, rather
+            # than always landing on the tree. First entry has no saved
+            # page, so this stays "tree".
+            resume = narrow_nav.normalize_page(self._narrow_resume_page)
+            if resume != self.narrow_page:
+                self.narrow_page = resume
+        else:
+            # Leaving narrow mode: remember where we were so a later
+            # rotation back into narrow lands there, then reset the
+            # navigator to the tree page — otherwise a stale
+            # "log"/"submitted" page silently confuses the next entry
+            # (and would leave the log panel forced to 1fr / a pane
+            # hidden in the wide layout).
+            self._narrow_resume_page = narrow_nav.normalize_page(
+                self.narrow_page)
             self.narrow_page = "tree"
         self._apply_pane_visibility()
+        # Re-render the tables so their column profiles match the new
+        # layout (narrow trims to fit a phone). Cheap — uses cached rows.
+        self._rerender_tables_for_mode()
 
     def watch_narrow_page(self, value: str) -> None:
         # Remember the last non-tree page for the F3 / Ctrl+W toggle.
@@ -4890,7 +5705,194 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             self._narrow_last_panel = narrow_nav.normalize_page(value)
         self._apply_pane_visibility()
 
+    def watch_short_mode(self, value: bool) -> None:
+        # Re-run visibility so the Log panel collapses / restores in the
+        # wide layout. (Narrow mode owns the Log via the page navigator,
+        # so this is a no-op there.)
+        self._apply_pane_visibility()
+
+    # --- in-flight activity indicator (perceived performance) -----------
+
+    _ACTIVITY_INTERVAL_SEC = 0.1
+
+    def _begin_activity(self, label: str) -> int:
+        """Register an in-flight interactive load; return an end token.
+
+        UI-thread only — worker threads call this via ``call_from_thread``.
+        The indicator stays *hidden* until the op crosses the perf_feel
+        delay threshold, so registering a fast op costs nothing visible.
+        """
+        self._activity_seq += 1
+        tok = self._activity_seq
+        self._activity[tok] = (label, time.monotonic())
+        self._ensure_activity_timer()
+        return tok
+
+    def _end_activity(self, token: int) -> None:
+        """Clear an in-flight load by token (UI-thread only)."""
+        self._activity.pop(token, None)
+        if not self._activity:
+            # Hide immediately so a just-finished op doesn't leave a
+            # stale frame up until the next tick.
+            self._update_activity_widget()
+
+    def _ensure_activity_timer(self) -> None:
+        if self._activity_timer is None:
+            try:
+                self._activity_timer = self.set_interval(
+                    self._ACTIVITY_INTERVAL_SEC, self._tick_activity,
+                )
+            except Exception:  # noqa: BLE001
+                self._activity_timer = None
+
+    def _tick_activity(self) -> None:
+        if not self._activity:
+            self._update_activity_widget()
+            # Stop the timer while idle — no point waking 10×/s for nothing.
+            if self._activity_timer is not None:
+                try:
+                    self._activity_timer.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._activity_timer = None
+            return
+        self._activity_tick += 1
+        self._update_activity_widget()
+
+    def _update_activity_widget(self) -> None:
+        try:
+            bar = self.query_one("#conn_bar", ConnectionBar)
+        except Exception:  # noqa: BLE001
+            return
+        if not self._activity:
+            bar.set_activity("")
+            return
+        # The oldest in-flight op drives the label + elapsed time.
+        label, start = min(self._activity.values(), key=lambda v: v[1])
+        elapsed_ms = (time.monotonic() - start) * 1000.0
+        text = perf_feel.render_activity(label, elapsed_ms, self._activity_tick)
+        bar.set_activity(text)
+
+    def _activity_begin_safe(self, label: str):
+        """Worker-thread entry point — marshal _begin_activity to the UI.
+
+        Returns the end token, or None if the marshal failed (app tearing
+        down). Activity tracking is non-essential UX, so a failure here
+        must never break the load it's wrapping.
+        """
+        try:
+            return self.call_from_thread(self._begin_activity, label)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _activity_end_safe(self, token) -> None:
+        if token is None:
+            return
+        try:
+            self.call_from_thread(self._end_activity, token)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # --- reconnect state in the ConnectionBar (perceived performance) ----
+
+    def _p4_on_retry(self, attempt: int, max_attempts: int, exc) -> None:
+        """Service reconnect callback — runs on a worker thread."""
+        try:
+            self.call_from_thread(
+                self._show_reconnecting, attempt, max_attempts)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _p4_on_recover(self) -> None:
+        """Service recovery callback — runs on a worker thread."""
+        try:
+            self.call_from_thread(self._show_reconnected)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _show_reconnecting(self, attempt: int, max_attempts: int) -> None:
+        try:
+            self.query_one(ConnectionBar).show_reconnecting(
+                f" ⟳ Reconnecting… (attempt {attempt}/{max_attempts})")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _show_reconnected(self) -> None:
+        # Restore the normal Server/User/Workspace/Root line.
+        try:
+            if self._p4_info is not None:
+                self.query_one(ConnectionBar).update_info(self._p4_info)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _update_breadcrumb(self) -> None:
+        """Show + refresh the narrow-mode page indicator (hide it wide).
+
+        The breadcrumb mirrors the *effective* cycle, so disabled / empty
+        pages don't appear in it. Cheap enough to call on every
+        visibility pass; never lets a failed query break the layout.
+        """
+        try:
+            bc = self.query_one("#narrow_breadcrumb", Static)
+        except Exception:  # noqa: BLE001
+            return
+        if not self.narrow_mode:
+            bc.display = False
+            return
+        bc.display = True
+        try:
+            # Width-aware: the strip falls back to a compact (numbers-only
+            # for non-current pages) form when the full labels would
+            # overflow a phone in portrait. -2 for the widget's 0 1
+            # horizontal padding.
+            avail = max(0, self.size.width - 2)
+            bc.update(narrow_nav.render_breadcrumb(
+                self.narrow_page, self._effective_narrow_pages(),
+                numbered=True, width=avail,
+            ))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _update_footer(self) -> None:
+        """Swap the default Footer for curated narrow-mode key hints.
+
+        Wide mode keeps Textual's normal Footer; narrow mode hides it
+        (too wide for a phone — it truncates to a useless prefix) and
+        shows a short, page-relevant hint strip instead. Never lets a
+        failed query break the layout.
+        """
+        try:
+            nf = self.query_one("#narrow_footer", Static)
+        except Exception:  # noqa: BLE001
+            nf = None
+        try:
+            footer = self.query_one(Footer)
+        except Exception:  # noqa: BLE001
+            footer = None
+        if not self.narrow_mode:
+            if nf is not None:
+                nf.display = False
+            if footer is not None:
+                footer.display = True
+            return
+        if footer is not None:
+            footer.display = False
+        if nf is not None:
+            nf.display = True
+            try:
+                n_pages = len(self._effective_narrow_pages())
+                # Width-aware: drop the least-important hints rather than
+                # clip mid-word on a phone. -2 for the 0 1 padding.
+                avail = max(0, self.size.width - 2)
+                nf.update(narrow_nav.render_footer_hints(
+                    self.narrow_page, n_pages, width=avail,
+                ))
+            except Exception:  # noqa: BLE001
+                pass
+
     def _apply_pane_visibility(self) -> None:
+        self._update_breadcrumb()
+        self._update_footer()
         try:
             main = self.query_one("#main")
             left = self.query_one("#left_pane")
@@ -4950,11 +5952,18 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             # Restore the persisted heights — leaving narrow mode
             # mustn't strand the log panel hidden or stuck at the
             # full-screen 1fr the narrow "log" page forces on it.
-            _show(log_panel, True)
-            _show(log_splitter, True)
+            # On a vertically short terminal, though, collapse the Log
+            # strip (panel + its drag splitter): at ~10 rows it crowds
+            # out the tree / tables, and the command history is still
+            # reachable via F2 (Command Monitor). Grow the height back
+            # over the threshold and the panel returns at its persisted
+            # size.
+            show_log = not self.short_mode
+            _show(log_panel, show_log)
+            _show(log_splitter, show_log)
             _show(detail_pane, True)
             _show(detail_splitter, True)
-            if log_panel is not None:
+            if log_panel is not None and show_log:
                 try:
                     log_panel.styles.height = self.log_panel_height
                 except Exception:  # noqa: BLE001
@@ -5060,7 +6069,9 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         focus until dismissed.
         """
         if self.narrow_mode:
-            self.narrow_page = narrow_nav.cycle_page(self.narrow_page, delta)
+            self.narrow_page = narrow_nav.cycle_page(
+                self.narrow_page, delta, self._effective_narrow_pages(),
+            )
             return
 
         chain = self._smart_focus_chain()
@@ -5110,25 +6121,172 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
             chain.append(self.query_one(wid))
         except Exception:  # noqa: BLE001
             pass
-        # 3) Log panel — always visible (unless narrow + overlay,
-        #    in which case our action_smart_tab will flip back to
-        #    tree first; the next Tab from log to tree handles that
-        #    direction because the chain still includes log).
+        # 3) Log panel — visible in the wide layout (unless narrow +
+        #    overlay, in which case our action_smart_tab will flip back
+        #    to tree first; the next Tab from log to tree handles that
+        #    direction because the chain still includes log). Skip it
+        #    when it's collapsed on a short terminal so Tab can't focus
+        #    a hidden widget.
         try:
-            chain.append(self.query_one("#log_panel"))
+            lp = self.query_one("#log_panel")
+            if lp.display:
+                chain.append(lp)
         except Exception:  # noqa: BLE001
             pass
         return chain
 
+    def on_key(self, event) -> None:
+        """Drive the narrow-mode page navigator from the keyboard.
+
+        Two gestures, both intercepted here before Textual's default key
+        handling:
+
+        * **Tab / Shift+Tab** — step the page cycle forward / back.
+        * **a bare digit (1-9)** — jump straight to that position in the
+          effective cycle (the breadcrumb numbers the chips so the digit
+          to press is visible).
+
+        Why intercept rather than bind:
+
+        Textual's ``Screen`` binds ``tab`` / ``shift+tab`` to
+        ``app.focus_next`` / ``app.focus_previous`` (see
+        ``Screen.BINDINGS``), and the screen sits *below* the app in the
+        binding-resolution chain — so the app-level ``tab → smart_tab``
+        binding is shadowed and never fires. Tab is the one key that
+        reliably reaches the app from a mobile accessory bar (iPhone
+        Blink doesn't emit ``Ctrl+Arrow``), so the page cycle has to win
+        here. We intercept the raw key before the default focus binding
+        runs.
+
+        Guards keep it surgical:
+
+        * only in ``narrow_mode`` — wide mode deliberately falls through
+          to Textual's default Tab focus traversal (every pane is
+          visible there, so plain focus-next is the natural behaviour);
+        * only on the base screen (``screen_stack`` length 1) so modal
+          dialogs keep their own Tab handling;
+        * never when a text ``Input`` is focused (the tree-filter
+          overlay, search boxes) so typing-field navigation is intact.
+        """
+        if not self.narrow_mode:
+            return
+        is_tab = event.key in ("tab", "shift+tab")
+        # A bare digit jumps straight to that position in the effective
+        # cycle (1 = first breadcrumb chip, etc.) — O(1) reach on a phone
+        # without walking there with Tab. ``event.character`` is the
+        # printable char; guard on it so e.g. "ctrl+1" doesn't count.
+        is_digit = (
+            event.character is not None
+            and event.character in "123456789"
+            and event.key == event.character
+        )
+        if not is_tab and not is_digit:
+            return
+        try:
+            if len(self.screen_stack) != 1:
+                return
+        except Exception:  # noqa: BLE001
+            return
+        if isinstance(self.focused, Input):
+            return
+        if is_tab:
+            event.stop()
+            event.prevent_default()
+            self.action_smart_tab(1 if event.key == "tab" else -1)
+            return
+        # digit jump
+        target = narrow_nav.jump_target_by_index(
+            int(event.character), self._effective_narrow_pages(),
+        )
+        if target is None:
+            return  # out of range — let the keystroke through untouched
+        event.stop()
+        event.prevent_default()
+        self.narrow_page = target
+
+    def _recompute_narrow_mode(self, width: int) -> None:
+        """Set ``narrow_mode`` from the layout pin + terminal width.
+
+        ``auto`` uses the width threshold; ``narrow`` / ``wide`` pin it.
+        Assigning the reactive only fires the watcher when the value
+        actually changes, so this is cheap to call on every resize.
+        """
+        self.narrow_mode = narrow_nav.resolve_narrow_mode(
+            self._layout_mode, width, NARROW_TERMINAL_WIDTH,
+        )
+
+    def action_cycle_layout_mode(self) -> None:
+        """Cycle the layout pin auto → narrow → wide → auto (+ toast).
+
+        Lets a user force the single-page navigator in a thin-but-wide
+        tmux pane, or force the full layout on a narrow desktop window,
+        without resizing. Session-only — the persistent default is the
+        ``[narrow] layout`` config value.
+        """
+        self._layout_mode = narrow_nav.cycle_layout_mode(self._layout_mode)
+        try:
+            self._recompute_narrow_mode(self.size.width)
+        except Exception:  # noqa: BLE001
+            pass
+        label = {
+            "auto": "Auto (by width)",
+            "narrow": "Narrow (pinned)",
+            "wide": "Wide (pinned)",
+        }.get(self._layout_mode, self._layout_mode)
+        self.notify(f"Layout: {label}", timeout=3)
+
     def on_resize(self, event) -> None:
         # Auto-enter / leave narrow mode whenever the terminal resizes
-        # across the threshold.
+        # across the threshold; likewise collapse / restore the Log panel
+        # when it crosses the short-height threshold. The layout pin
+        # (config / Ctrl+Shift+N) can override the width rule.
         try:
-            self.narrow_mode = event.size.width < NARROW_TERMINAL_WIDTH
+            self._recompute_narrow_mode(event.size.width)
+            self.short_mode = event.size.height < SHORT_TERMINAL_HEIGHT
         except Exception:  # noqa: BLE001
             pass
 
     # --- narrow-mode panel toggle ---------------------------------------
+
+    # page id -> the DataTable whose emptiness decides skip_empty.
+    _PANEL_PAGE_TABLE = {
+        "pending": "#pending_table",
+        "history": "#history_table",
+        "submitted": "#submitted_table",
+    }
+
+    def _empty_panel_pages(self) -> tuple[str, ...]:
+        """Panel pages whose table currently has zero rows.
+
+        Used by ``skip_empty`` so the navigator steps over dead tables.
+        A missing / not-yet-mounted table is treated as *not* empty so a
+        transient query miss can't yank a page out of the cycle.
+        """
+        out: list[str] = []
+        for page, wid in self._PANEL_PAGE_TABLE.items():
+            try:
+                if self.query_one(wid, DataTable).row_count == 0:
+                    out.append(page)
+            except Exception:  # noqa: BLE001
+                pass
+        return tuple(out)
+
+    def _effective_narrow_pages(self) -> tuple[str, ...]:
+        """The live narrow-mode page cycle (config + emptiness applied).
+
+        Combines the user's ``[narrow] disabled_pages`` with the empty
+        panel pages (only when ``skip_empty`` is set) and hands both to
+        :func:`narrow_nav.effective_pages`, which guarantees ``tree`` /
+        ``log`` survive. Falls back to the full cycle on any error so a
+        bad config can never strand the navigator.
+        """
+        try:
+            ncfg = self.config.narrow
+            disabled = tuple(ncfg.disabled_pages or ())
+            empty = self._empty_panel_pages() if ncfg.skip_empty else ()
+            return narrow_nav.effective_pages(disabled=disabled, empty=empty)
+        except Exception:  # noqa: BLE001
+            return narrow_nav.NARROW_PAGES
 
     def action_toggle_narrow_panels(self) -> None:
         """F3 / Ctrl+W — quick-toggle between the tree and the last
@@ -5137,6 +6295,7 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         if self.narrow_mode:
             self.narrow_page = narrow_nav.toggle_target(
                 self.narrow_page, self._narrow_last_panel,
+                self._effective_narrow_pages(),
             )
         else:
             self._focus_active_right_pane()
@@ -5162,14 +6321,18 @@ class P4VApp(_MenuMixin, _DetailMixin, _DiffRevMixin, App):
         Submitted), since all panes are already visible.
         """
         if self.narrow_mode:
-            self.narrow_page = narrow_nav.cycle_page(self.narrow_page, +1)
+            self.narrow_page = narrow_nav.cycle_page(
+                self.narrow_page, +1, self._effective_narrow_pages(),
+            )
             return
         self._cycle_right_tab(+1)
 
     def action_right_tab_prev(self) -> None:
         """Ctrl+← — reverse of :meth:`action_right_tab_next`."""
         if self.narrow_mode:
-            self.narrow_page = narrow_nav.cycle_page(self.narrow_page, -1)
+            self.narrow_page = narrow_nav.cycle_page(
+                self.narrow_page, -1, self._effective_narrow_pages(),
+            )
             return
         self._cycle_right_tab(-1)
 

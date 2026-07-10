@@ -6,10 +6,25 @@
     color: $text;
 }
 
-#job_status {
+/* Narrow-mode page breadcrumb. Hidden by default (wide layout); the app
+   flips display on when narrow_mode engages. */
+#narrow_breadcrumb {
     height: 1;
-    background: $surface;
+    display: none;
+    background: $boost;
     color: $text;
+    padding: 0 1;
+}
+
+/* Narrow-mode curated key hints, docked at the bottom in place of the
+   default Footer. Hidden in the wide layout. */
+#narrow_footer {
+    dock: bottom;
+    height: 1;
+    display: none;
+    background: $panel;
+    color: $text;
+    padding: 0 1;
 }
 
 #main {

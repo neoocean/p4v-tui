@@ -235,9 +235,39 @@ class _MenuMixin:
         if wid == "pending_table":
             self._show_pending_panel_menu()
             return
+        if wid == "submitted_table":
+            self._show_submitted_panel_menu()
+            return
         self.notify(
-            "Panel menu (Shift+M) is wired for the Pending tab only.",
+            "Panel menu (Shift+M) is wired for the Pending / Submitted tabs.",
             timeout=3,
+        )
+
+    def _show_submitted_panel_menu(self) -> None:
+        """Panel-level menu for the Submitted tab — Filter/Sort + Refresh.
+
+        The Submitted table has no per-workspace column, so its filter
+        dialog hides the workspace field (``show_workspace=False``).
+        """
+        filt = "● " if self._submitted_view.is_active() else ""
+        items = [
+            ContextMenuItem(
+                f"{filt}Filter / Sort Changelists…", "filter_submitted", "",
+            ),
+            ContextMenuItem(
+                "Refresh Submitted Changelists", "refresh_submitted", "F5",
+            ),
+        ]
+
+        def on_close(action_id: str | None) -> None:
+            if action_id == "filter_submitted":
+                self.open_submitted_filter()
+            elif action_id == "refresh_submitted":
+                self._load_submitted()
+
+        self.push_screen(
+            ContextMenuModal(items, title="Submitted Changelists"),
+            on_close,
         )
 
     def _show_pending_menu(self) -> None:
@@ -332,11 +362,15 @@ class _MenuMixin:
         on plain ``m`` — the row menu carries CL-specific operations
         and this one carries the panel-wide ones.
         """
+        filt = "● " if self._pending_view.is_active() else ""
         items = [
             ContextMenuItem(
                 "New Pending Changelist…", "new_pending_cl", "Ctrl+N",
             ),
             ContextMenuItem("Sort Files By  ▸", "sort_files", ""),
+            ContextMenuItem(
+                f"{filt}Filter / Sort Changelists…", "filter_pending", "",
+            ),
             ContextMenuItem(
                 "Refresh All Pending Changelists",
                 "refresh_pending", "F5",
@@ -350,6 +384,8 @@ class _MenuMixin:
                 self.action_new_pending_cl()
             elif action_id == "sort_files":
                 self._show_sort_files_submenu()
+            elif action_id == "filter_pending":
+                self.open_pending_filter()
             elif action_id == "refresh_pending":
                 self._load_pending()
 
@@ -538,7 +574,7 @@ class _MenuMixin:
             elif action_id == "bci_copy":
                 self._open_bci_for_cl("copy", c)
             elif action_id == "bci_branch":
-                self._open_bci_modal("branch", "")
+                self._open_branch_flow("")
             elif action_id == "diff_prev_revs":
                 self._run_diff_prev_revs(c)
             elif action_id == "diff_arbitrary":
@@ -678,7 +714,7 @@ class _MenuMixin:
             elif action_id == "bci_copy":
                 self._open_bci_for_cl("copy", c)
             elif action_id == "bci_branch":
-                self._open_bci_modal("branch", "")
+                self._open_branch_flow("")
             elif action_id == "undo_cl":
                 self._confirm_undo_cl(c)
             elif action_id == "tag_label":

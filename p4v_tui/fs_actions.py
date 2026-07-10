@@ -92,6 +92,52 @@ def open_with_external(
     return True
 
 
+def run_merge_tool(
+    command: str,
+    args_template: str,
+    *,
+    base: str,
+    theirs: str,
+    yours: str,
+    merge: str,
+    timeout: float | None = None,
+) -> int:
+    """Run an external 3-way merge tool and **block** until it exits.
+
+    Unlike :func:`open_with_external` this waits for the tool — the
+    resolve flow needs the merged ``{merge}`` file written before it can
+    read the result back. Safe to call only off the UI thread (it's
+    invoked from a worker).
+
+    ``args_template`` placeholders: ``{base}`` ``{theirs}`` ``{yours}``
+    ``{merge}``. Empty template defaults to P4Merge's CLI order
+    ``"{base} {theirs} {yours} {merge}"``.
+
+    Returns the tool's exit code (0 = success by convention). Raises
+    ``FileNotFoundError`` if the command can't be found and ``ValueError``
+    on a malformed template, so the caller can distinguish "tool missing"
+    from "user cancelled" (non-zero exit).
+    """
+    import shlex
+
+    template = (args_template or "{base} {theirs} {yours} {merge}").strip()
+    try:
+        rendered = template.format(
+            base=base, theirs=theirs, yours=yours, merge=merge,
+        )
+    except (KeyError, IndexError, ValueError) as e:
+        raise ValueError(f"bad merge-tool args template: {e}") from e
+    use_posix = sys.platform != "win32"
+    try:
+        argv = [command] + shlex.split(rendered, posix=use_posix)
+    except ValueError as e:
+        raise ValueError(f"bad merge-tool args template: {e}") from e
+    if shutil.which(command) is None and not Path(command).exists():
+        raise FileNotFoundError(command)
+    completed = subprocess.run(argv, timeout=timeout, check=False)
+    return completed.returncode
+
+
 def open_command_window(local_dir: str) -> bool:
     p = Path(local_dir)
     if not p.exists():

@@ -105,7 +105,13 @@ class FindFileModal(ModalScreen[Optional[str]]):
         # the OptionList via call_from_thread.
         def _bg() -> None:
             try:
-                rows = self._p4.run("files", "-m", "100", pattern)
+                # ``-e``: only files that exist at head. The server drops
+                # delete / move/delete / purge / archive in one shot —
+                # a client-side ``action != "delete"`` would miss
+                # ``move/delete`` (the old path of a rename) and surface
+                # renamed-away paths as live hits. Same trap documented on
+                # ``P4Service.files``.
+                rows = self._p4.run("files", "-e", "-m", "100", pattern)
             except Exception:  # noqa: BLE001
                 rows = []
             self.app.call_from_thread(self._on_results, pattern, rows)
@@ -115,10 +121,11 @@ class FindFileModal(ModalScreen[Optional[str]]):
         )
 
     def _on_results(self, pattern: str, rows: list) -> None:
+        # ``-e`` already excluded gone-at-head files server-side, so a
+        # depotFile is all we need here.
         files = [r["depotFile"] for r in rows
                  if isinstance(r, dict)
-                 and r.get("depotFile")
-                 and r.get("action") != "delete"]
+                 and r.get("depotFile")]
         opt_list = self.query_one("#results", OptionList)
         opt_list.clear_options()
         if not files:

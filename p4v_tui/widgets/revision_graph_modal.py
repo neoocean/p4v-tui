@@ -180,12 +180,26 @@ class RevisionGraphModal(ModalScreen[None]):
             sr = srevs[k] if k < len(srevs) else ""
             er = erevs[k] if k < len(erevs) else ""
             rev_span = self._format_rev_span(sr, er)
-            arrow = "↗" if " into " in str(how) else "↙"
+            arrow = self._edge_arrow(how)
             body.write(Text(
                 f"  {arrow} {how:<14}  {other}{rev_span}",
                 style="yellow",
             ))
         body.write(Text(""))
+
+    @staticmethod
+    def _edge_arrow(how) -> str:
+        """Arrowhead for an integration edge, from filelog's ``how``
+        string. ``↗`` = outgoing (this rev was integrated *into*
+        another file — ``branch into`` / ``copy into`` / ``merge into``
+        / ``moved into`` …); ``↙`` = incoming (created / fed *from*
+        another, plus the ``ignored`` / ``undid`` oddballs).
+
+        Match the ``into`` *token*, not a `` into `` substring: the real
+        strings are two words with no trailing space (``branch into``),
+        so a space-padded test never fired and every outgoing edge drew
+        the wrong (incoming) arrow."""
+        return "↗" if "into" in str(how).split() else "↙"
 
     @staticmethod
     def _format_rev_span(sr, er) -> str:

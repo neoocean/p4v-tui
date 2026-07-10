@@ -6,7 +6,8 @@ non-blocking interactive commands). Secondary: cover p4v's daily-developer
 surface. Single entry point, no daemon/plugins.
 
 Read this first, then reach for the deeper docs as needed:
-- `README.md` — user-facing features + keybindings (Korean).
+- `README.md` — user-facing overview + deploy guide (English);
+  `README.ko.md` is the Korean original (keep the two in sync).
 - `DESIGN.md` — architecture, full p4v feature-coverage matrix, CL history.
 - `docs/MEMORY.md` — **non-obvious gotchas; read before touching the CLI
   backend, Textual modals, or TOML/spec-form parsing.**
@@ -89,9 +90,13 @@ move-following AND the 3-way merge `resolve -am`/`-af` flow were verified
 against real renames/conflicts on both backends — and both turned out to
 be *broken*, now fixed (see `tests/test_move_following.py`,
 `tests/test_merge3.py::TestRealPerforceMarkers`, and
-`docs/handoff-manual-tests.md`). Only the end-to-end TUI gestures
-(Alt+C→move→Ctrl+G, and Ctrl+E in the Resolve modal) remain to click
-through manually.
+`docs/handoff-manual-tests.md`). Those two TUI gestures are ALSO
+automated now (`tests/test_e2e_gestures.py`, CL 57328). What remains
+manual is the short list in `docs/handoff-manual-tests.md` /
+`docs/roadmap-2026-07.md` §3: live submit-guard warnings, partial
+shelve, tree bulk ops, the shared-state machine-B read-only-edit
+reconcile, and the visual/real-device checks (merge-editor legibility,
+phone narrow layout).
 
 ## Textual gotcha (from docs/MEMORY.md — load-bearing)
 

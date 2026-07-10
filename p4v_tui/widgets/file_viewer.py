@@ -134,10 +134,17 @@ class FileViewerModal(ModalScreen[None]):
         narrow: bool = False,
         filename: str | None = None,
         line_numbers: bool = True,
+        rendered: list | None = None,
     ) -> None:
         super().__init__()
         self._title = title
         self._content = content
+        # Pre-rendered body lines (e.g. half-block image ANSI art). When
+        # set, the viewer writes them verbatim and skips the text path
+        # (byte cap, syntax highlight, splitlines) entirely — the caller
+        # has already produced ``rich`` renderables. ``content`` is kept
+        # only so the line-number toggle has a stable no-op fallback.
+        self._rendered = rendered
         # Filename is used solely for lexer detection by ``rich.syntax``.
         # Passing ``None`` keeps the viewer in plain-text mode (the
         # right choice for diff dumps, CL describes, etc).
@@ -178,9 +185,16 @@ class FileViewerModal(ModalScreen[None]):
         log.focus()
         # Defer the actual write so the modal frame paints first; the
         # user sees the dialog immediately and content fills in behind.
-        self._pending_lines = self._prepare_lines(self._content)
+        self._pending_lines = self._body_lines()
         self._line_idx = 0
         self.call_after_refresh(self._write_next_batch)
+
+    def _body_lines(self) -> list:
+        """The lines to write: pre-rendered renderables when supplied,
+        otherwise the text pipeline (cap + highlight + line numbers)."""
+        if self._rendered is not None:
+            return self._apply_line_numbers(self._rendered)
+        return self._prepare_lines(self._content)
 
     def _prepare_lines(self, content: str) -> list:
         # Apply the byte cap on the raw string; trim mid-line if needed
@@ -256,7 +270,7 @@ class FileViewerModal(ModalScreen[None]):
             log.clear()
         except Exception:  # noqa: BLE001
             return
-        self._pending_lines = self._prepare_lines(self._content)
+        self._pending_lines = self._body_lines()
         self._line_idx = 0
         self.call_after_refresh(self._write_next_batch)
 

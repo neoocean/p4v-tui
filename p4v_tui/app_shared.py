@@ -43,6 +43,16 @@ DEFAULT_AUTO_REFRESH_PENDING_SEC = 30
 # to manually toggle by resizing the window on a desktop.
 NARROW_TERMINAL_WIDTH = 100
 
+# When the terminal is *shorter* than this many rows we collapse the
+# bottom Log panel (it docks at ~10 rows; on a short viewport that strip
+# crowds out the tree / tables). Only relevant in the wide layout —
+# narrow mode already shows the Log on its own full-screen page. The
+# command history stays reachable via F2 (Command Monitor). A comfortable
+# layout (header + connection bar + ~15-row detail pane + ~10-row Log +
+# room for table rows) wants ~45 rows, which is the point below which the
+# Log strip starts eating into usable rows.
+SHORT_TERMINAL_HEIGHT = 45
+
 
 def _extract_qualifier(spec: str) -> str:
     """Pull the trailing ``#rev`` or ``@CL`` qualifier off a depot spec.
@@ -89,10 +99,36 @@ def _truncate_workspace(name: str, head: int = 6) -> str:
 
 
 class ConnectionBar(Static):
+    def __init__(self, renderable="", **kwargs):
+        super().__init__(renderable, **kwargs)
+        self._conn_text: str = str(renderable)
+        self._activity_text: str = ""
+        self._reconnecting: bool = False
+
     def update_info(self, info: P4Info) -> None:
-        self.update(
+        self._reconnecting = False
+        self._conn_text = (
             f" [b]Server:[/b] {info.port}    "
             f"[b]User:[/b] {info.user}    "
             f"[b]Workspace:[/b] {info.client}    "
             f"[b]Root:[/b] {info.client_root} "
         )
+        self._render_bar()
+
+    def set_activity(self, text: str) -> None:
+        """Update the in-flight activity suffix shown in the bar; empty clears it."""
+        self._activity_text = text
+        if not self._reconnecting:
+            self._render_bar()
+
+    def show_reconnecting(self, text: str) -> None:
+        """Show a reconnect message and suppress the activity indicator."""
+        self._reconnecting = True
+        self._activity_text = ""
+        self.update(text)
+
+    def _render_bar(self) -> None:
+        if self._activity_text:
+            self.update(f"{self._conn_text}  [dim]{self._activity_text}[/dim]")
+        else:
+            self.update(self._conn_text)

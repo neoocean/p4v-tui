@@ -132,6 +132,52 @@ class TestWriteConfigRoundTrip:
         assert reloaded.swarm.base_url == "http://swarm-host"
 
 
+class TestNarrowConfig:
+    def test_default_is_empty(self, tmp_path):
+        cfg = load_config(tmp_path / "nope.toml")
+        assert cfg.narrow.disabled_pages == []
+        assert cfg.narrow.skip_empty is False
+        assert cfg.narrow.layout == "auto"
+
+    def test_layout_pin_parsed_and_validated(self, tmp_path):
+        p = tmp_path / "n.toml"
+        p.write_text('[narrow]\nlayout = "narrow"\n', encoding="utf-8")
+        assert load_config(p).narrow.layout == "narrow"
+        # bad value falls back to auto
+        p.write_text('[narrow]\nlayout = "sideways"\n', encoding="utf-8")
+        assert load_config(p).narrow.layout == "auto"
+
+    def test_parses_disabled_pages_and_skip_empty(self, tmp_path):
+        p = tmp_path / "n.toml"
+        p.write_text(
+            '[narrow]\ndisabled_pages = ["history", "submitted"]\n'
+            "skip_empty = true\n",
+            encoding="utf-8",
+        )
+        cfg = load_config(p)
+        assert cfg.narrow.disabled_pages == ["history", "submitted"]
+        assert cfg.narrow.skip_empty is True
+
+    def test_unknown_and_always_on_pages_are_filtered(self, tmp_path):
+        # "tree"/"log" can't be disabled; "bogus" is unknown -> both dropped.
+        p = tmp_path / "n.toml"
+        p.write_text(
+            '[narrow]\ndisabled_pages = ["tree", "log", "bogus", "pending"]\n',
+            encoding="utf-8",
+        )
+        cfg = load_config(p)
+        assert cfg.narrow.disabled_pages == ["pending"]
+
+    def test_page_names_are_case_insensitive_and_deduped(self, tmp_path):
+        p = tmp_path / "n.toml"
+        p.write_text(
+            '[narrow]\ndisabled_pages = ["History", "history", "SUBMITTED"]\n',
+            encoding="utf-8",
+        )
+        cfg = load_config(p)
+        assert cfg.narrow.disabled_pages == ["history", "submitted"]
+
+
 class TestJiraConfig:
     def test_default_is_empty(self, tmp_path):
         cfg = load_config(tmp_path / "nope.toml")

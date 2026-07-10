@@ -11,7 +11,7 @@ from textual import work
 
 from .p4client import P4Exception
 from .sync_job import ChunkedSyncJob
-from .utils import first_nonblank_line, truncate_cells
+from .utils import first_nonblank_line, is_creation_action, truncate_cells
 from .widgets.confirm import ConfirmModal
 from .widgets.file_viewer import FileViewerModal
 from .widgets.move_change_modal import (
@@ -505,8 +505,11 @@ class _DiffRevMixin:
                     cur_rev = int(rev_str)
                 except (TypeError, ValueError):
                     continue
-                # add / branch produce rev 1 with no real predecessor.
-                if cur_rev <= 1 or action in ("add", "branch"):
+                # A creation action (add / branch / import / move/add)
+                # has no real predecessor; rev 1 likewise. move/add can
+                # land at rev > 1 on a resurrected path, so the action
+                # check is needed beyond the cur_rev guard.
+                if cur_rev <= 1 or is_creation_action(action):
                     skipped_no_prior += 1
                     continue
                 targets.append(f"{df}#{cur_rev - 1}")

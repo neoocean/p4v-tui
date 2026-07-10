@@ -91,6 +91,7 @@ class ResolveModal(ModalScreen[Optional[bool]]):
     BINDINGS = [
         Binding("escape", "cancel", "Close", priority=True),
         Binding("ctrl+e", "merge_current", "3-way merge", priority=True),
+        Binding("ctrl+t", "merge_external", "Merge tool", priority=True),
     ]
 
     def __init__(self, scope, p4_service) -> None:
@@ -119,7 +120,8 @@ class ResolveModal(ModalScreen[Optional[bool]]):
             yield Static(
                 "  Pick an action per file, then Run. Auto picks the "
                 "non-conflicting merge; Yours/Theirs replace the file; "
-                "Skip leaves it for later.",
+                "Skip leaves it for later. Ctrl+E in-app 3-way merge · "
+                "Ctrl+T external merge tool.",
                 id="hint",
             )
             with Horizontal(id="per_file_row"):
@@ -282,6 +284,28 @@ class ResolveModal(ModalScreen[Optional[bool]]):
         # Defer to the app (like the Fast Search modal's tagged dict): the
         # merge round trip needs p4 calls + a nested modal the app owns.
         self.dismiss({"merge": path})
+
+    def action_merge_external(self) -> None:
+        """Hand the cursor row's file to the app's external merge tool.
+
+        Mirrors :meth:`action_merge_current` but routes to the configured
+        ``[merge_tool]`` (e.g. P4Merge) instead of the in-app editor. The
+        app surfaces a hint if no merge tool is configured."""
+        if not self._files:
+            self.app.notify("No files to merge.", timeout=3)
+            return
+        try:
+            table = self.query_one("#files_table", DataTable)
+            row_idx = table.cursor_row
+        except Exception:  # noqa: BLE001
+            row_idx = 0
+        if row_idx is None or row_idx < 0 or row_idx >= len(self._files):
+            self.app.notify("Move the cursor onto a file first.", timeout=3)
+            return
+        f = self._files[row_idx]
+        path = (f.get("clientFile") or f.get("fromFile")
+                or f.get("toFile") or "?")
+        self.dismiss({"merge_tool": path})
 
     @work(thread=True, group="resolve_diff_preview", exclusive=True)
     def _spawn_diff_worker(self, path: str) -> None:

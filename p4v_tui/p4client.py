@@ -6,8 +6,11 @@ non-x86 sidecars, SSH-only servers with no compiler) but do have the
 `p4` command on PATH. To keep the TUI usable there, we wrap two
 interchangeable backends behind one `P4Service` façade:
 
-  * `_PythonBackend` — the original path. One in-process `P4.P4()`
-    connection re-used across calls. Lowest latency per call.
+  * `_PythonBackend` — the preferred path. A small *pool* of in-process
+    `P4.P4()` connections (default 4, `P4V_PY_CONCURRENCY`), each leased
+    to one thread at a time. Lowest latency per call, and a slow command
+    occupies only its own connection instead of serialising every other
+    p4 call behind it.
   * `_CLIBackend` — spawns a short-lived `p4` subprocess per call,
     reads tagged output as Python marshal-2 (`p4 -G ...`), pipes form
     text to stdin for `*-i` write commands. Slower per call (fork +
@@ -75,6 +78,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
@@ -135,6 +139,38 @@ try:
     )
 except ValueError:
     _CLI_CONCURRENCY = 4
+
+
+# How many P4Python connections the Python backend keeps in its pool —
+# i.e. how many backend calls may run truly concurrently.
+#
+# Background: a single `P4.P4()` connection is NOT thread-safe (one
+# socket, one in-flight command), so the original design serialised
+# *every* backend call through one lock. The practical fallout: a
+# single slow command (a large-file `print`, a deep `filelog`, a sync
+# chunk against a laggy server) held the lock, and every other p4
+# operation the UI needed — tree expansion, file preview, the pending
+# refresh tick — queued behind it. The event loop stayed alive (the
+# work is on `@work(thread=True)` workers and P4Python releases the GIL
+# during socket I/O), but *every p4-backed feature* stalled in lockstep,
+# so the whole app felt frozen whenever one command was slow.
+#
+# P4Python supports the standard "one P4 instance per thread" pattern:
+# distinct `P4.P4()` objects on distinct threads are independent. So we
+# keep a small pool of connections and lease one per call. A slow
+# command now occupies a single connection; quick interactive commands
+# grab another and stay responsive.
+#
+# Default 4 mirrors the CLI backend — enough for a typical tree fan-out
+# (dirs + files + fstat) to overlap one slow operation without opening a
+# socket per keystroke. Operators override via the env var. Set to 1 to
+# restore the old strictly-serial behaviour.
+try:
+    _PY_CONCURRENCY: int = max(
+        1, int(os.environ.get("P4V_PY_CONCURRENCY", "4")),
+    )
+except ValueError:
+    _PY_CONCURRENCY = 4
 
 
 # TTL (seconds) for the CLI backend's idempotent-read cache. A handful
@@ -255,12 +291,13 @@ class _Backend:
     #: Human-readable name shown in the startup `Backend: …` log line.
     name: str = "?"
 
-    #: How many backend calls may run in parallel. P4Python's
-    #: in-process connection isn't thread-safe so the Python backend
-    #: must serialise (1). The CLI backend's per-call subprocess is
-    #: independent, so multiple can run concurrently (default 4).
-    #: P4Service builds a BoundedSemaphore(this) to gate concurrent
-    #: `run_tagged` / `run_text` / form calls.
+    #: How many backend calls may run in parallel. A single P4Python
+    #: connection (and a single `p4` socket) isn't thread-safe, so each
+    #: backend reaches concurrency by having N *independent* connections:
+    #: the Python backend pools N `P4.P4()` instances, the CLI backend
+    #: forks N subprocesses (both default 4). P4Service builds a
+    #: BoundedSemaphore(this) to gate concurrent `run_tagged` /
+    #: `run_text` / form calls so no more than N are ever in flight.
     max_concurrent_calls: int = 1
 
     @property
@@ -406,8 +443,31 @@ class _Backend:
 # Python backend — wraps P4Python in its historical shape
 # ---------------------------------------------------------------------------
 
+class _PyConn:
+    """One pooled P4Python connection, leased to a single thread at a time.
+
+    A bare ``P4.P4()`` socket is not safe to drive from two threads at
+    once. The backend keeps several of these and hands exactly one to
+    each in-flight call, so concurrency is achieved by *more
+    connections*, not by sharing one. ``gen`` tags the connection with
+    the params generation it was built under so a ``configure()`` that
+    changes the target can discard now-stale connections.
+    """
+
+    __slots__ = ("p4", "connected", "gen")
+
+    def __init__(self, p4: Any, gen: int) -> None:
+        self.p4 = p4
+        self.connected = False
+        self.gen = gen
+
+
 class _PythonBackend(_Backend):
     name = "P4Python"
+    #: A pool of independent P4Python connections (default 4), so one
+    #: slow command can't serialise every other p4 call behind it. See
+    #: the `_PY_CONCURRENCY` module note for the full rationale.
+    max_concurrent_calls = _PY_CONCURRENCY
 
     def __init__(self) -> None:
         # P4 import is required *inside* this constructor — the whole
@@ -416,32 +476,49 @@ class _PythonBackend(_Backend):
         # instantiate _PythonBackend after a successful `import P4`.
         import P4  # noqa: PLC0415
         self._P4 = P4
-        self._p4 = P4.P4()
-        self._p4.exception_level = 1  # warnings -> result; errors -> raise
-        self._connected = False
+        # Desired connection params. Seeded from a template P4 object so
+        # env / P4CONFIG-resolved values are visible via the properties
+        # *before* the user calls configure(); configure() overrides.
+        tmpl = P4.P4()
+        tmpl.exception_level = 1  # warnings -> result; errors -> raise
+        self._port = tmpl.port or ""
+        self._user = tmpl.user or ""
+        self._client = tmpl.client or ""
+        self._charset = tmpl.charset or ""
+        # Logical "connected" flag the façade mirrors. Actual sockets
+        # open lazily — one per pooled connection, on first lease — the
+        # same lazy lifecycle the CLI backend already uses.
+        self._active = False
+        # Connection pool. `_idle` holds connections free to lease;
+        # `_gen` bumps on every param-changing configure() so a leased
+        # connection built under stale params is discarded on release
+        # rather than re-pooled. The template seeds the pool so we don't
+        # waste the env probe above.
+        self._pool_lock = threading.Lock()
+        self._gen = 0
+        self._idle: list[_PyConn] = [_PyConn(tmpl, self._gen)]
 
     @property
     def connected(self) -> bool:
-        return self._connected
+        return self._active
 
     @property
     def port(self) -> str:
-        # Read straight off the P4 instance so env / P4CONFIG resolved
-        # values are visible to the façade even when the user hasn't
-        # overridden anything via configure().
-        return self._p4.port or ""
+        # Reflect the env / P4CONFIG-resolved value (or the user's
+        # configure() override) without needing a live socket.
+        return self._port
 
     @property
     def user(self) -> str:
-        return self._p4.user or ""
+        return self._user
 
     @property
     def client(self) -> str:
-        return self._p4.client or ""
+        return self._client
 
     @property
     def charset(self) -> str:
-        return self._p4.charset or ""
+        return self._charset
 
     def configure(
         self,
@@ -451,65 +528,145 @@ class _PythonBackend(_Backend):
         client: str | None = None,
         charset: str | None = None,
     ) -> None:
-        if port is not None:
-            self._p4.port = port
-        if user is not None:
-            self._p4.user = user
-        if client is not None:
-            self._p4.client = client
-        if charset is not None:
-            self._p4.charset = charset
+        changed = False
+        if port is not None and port != self._port:
+            self._port = port
+            changed = True
+        if user is not None and user != self._user:
+            self._user = user
+            changed = True
+        if client is not None and client != self._client:
+            self._client = client
+            changed = True
+        if charset is not None and charset != self._charset:
+            self._charset = charset
+            changed = True
+        if not changed:
+            return
+        # Params changed (profile switch): bump the generation and drop
+        # every idle connection so the next lease builds fresh ones
+        # against the new target. Connections currently leased to other
+        # threads carry the old gen and get disposed on release.
+        with self._pool_lock:
+            self._gen += 1
+            stale = self._idle
+            self._idle = []
+        for conn in stale:
+            self._safe_disconnect(conn)
 
     def connect(self) -> None:
-        if self._connected:
-            return
-        try:
-            self._p4.connect()
-        except self._P4.P4Exception as e:
-            raise P4Exception(str(e)) from e
-        self._connected = True
+        # Lazy: just flip the logical flag. Each pooled connection opens
+        # its own socket on first use (see `_lease`). Connecting all N up
+        # front would pay N handshakes for a pool the user may never
+        # fully exercise.
+        self._active = True
 
     def disconnect(self) -> None:
-        if not self._connected:
-            return
+        self._active = False
+        with self._pool_lock:
+            conns = self._idle
+            self._idle = []
+        for conn in conns:
+            self._safe_disconnect(conn)
+
+    # --- connection pool ---------------------------------------------------
+
+    def _new_p4(self) -> Any:
+        p4 = self._P4.P4()
+        p4.exception_level = 1
+        if self._port:
+            p4.port = self._port
+        if self._user:
+            p4.user = self._user
+        if self._client:
+            p4.client = self._client
+        if self._charset:
+            p4.charset = self._charset
+        return p4
+
+    def _safe_disconnect(self, conn: _PyConn) -> None:
+        if conn.connected:
+            try:
+                conn.p4.disconnect()
+            except Exception:  # noqa: BLE001 — disconnect must be tolerant
+                pass
+            conn.connected = False
+
+    def _acquire(self) -> _PyConn:
+        """Lease an idle connection (or build one) for the current thread."""
+        stale: list[_PyConn] = []
+        with self._pool_lock:
+            cur = self._gen
+            conn: _PyConn | None = None
+            while self._idle:
+                candidate = self._idle.pop()
+                if candidate.gen == cur:
+                    conn = candidate
+                    break
+                stale.append(candidate)
+            if conn is None:
+                conn = _PyConn(self._new_p4(), cur)
+        for dead in stale:
+            self._safe_disconnect(dead)
+        return conn
+
+    def _release(self, conn: _PyConn, *, broken: bool) -> None:
+        """Return a connection to the pool, or dispose it.
+
+        ``broken`` (a connection-level failure) disposes the socket so
+        the next lease reconnects. We also dispose if the service has
+        since disconnected, the connection's params are stale, or the
+        idle pool is already full.
+        """
+        if not broken:
+            with self._pool_lock:
+                if (
+                    self._active
+                    and conn.gen == self._gen
+                    and len(self._idle) < self.max_concurrent_calls
+                ):
+                    self._idle.append(conn)
+                    return
+        self._safe_disconnect(conn)
+
+    @contextmanager
+    def _connection(self):
+        """Lease a connected P4 instance, translating P4Python errors.
+
+        Yields the live ``P4.P4()`` object. Raises :class:`P4Exception`
+        (never the raw ``P4.P4Exception``) and, on a connection-level
+        failure, marks the leased socket broken so it's discarded rather
+        than re-pooled — mirroring the old `_drop_connection` behaviour.
+        """
+        conn = self._acquire()
+        broken = False
         try:
-            self._p4.disconnect()
-        except Exception:  # noqa: BLE001 — disconnect must be tolerant
-            pass
-        self._connected = False
+            try:
+                if not conn.connected:
+                    conn.p4.connect()
+                    conn.connected = True
+                yield conn.p4
+            except self._P4.P4Exception as e:
+                if _is_connection_error(e):
+                    broken = True
+                raise P4Exception(str(e)) from e
+        finally:
+            self._release(conn, broken=broken)
 
     # --- core invocation ---------------------------------------------------
 
-    def _ensure_connected(self) -> None:
-        if not self._connected:
-            self.connect()
-
     def run_tagged(self, args: Sequence[str]) -> list:
-        self._ensure_connected()
-        try:
-            return list(self._p4.run(*args))
-        except self._P4.P4Exception as e:
-            # Forget the broken connection so the resilient runner
-            # rebuilds it on the next attempt.
-            if _is_connection_error(e):
-                self._drop_connection()
-            raise P4Exception(str(e)) from e
+        with self._connection() as p4:
+            return list(p4.run(*args))
 
     def run_text(self, args: Sequence[str]) -> str:
-        self._ensure_connected()
-        prev_tagged = self._p4.tagged
-        self._p4.tagged = False
-        try:
+        with self._connection() as p4:
+            prev_tagged = p4.tagged
+            p4.tagged = False
             try:
-                result = self._p4.run(*args)
-            except self._P4.P4Exception as e:
-                if _is_connection_error(e):
-                    self._drop_connection()
-                # Untagged callers (diff_describe etc.) historically
-                # caught and turned this into "" — preserve that shape.
-                raise P4Exception(str(e)) from e
-        finally:
-            self._p4.tagged = prev_tagged
+                result = p4.run(*args)
+            finally:
+                p4.tagged = prev_tagged
         parts: list[str] = []
         for item in result:
             if isinstance(item, str):
@@ -518,23 +675,15 @@ class _PythonBackend(_Backend):
                 parts.append(bytes(item).decode("utf-8", errors="replace"))
         return "".join(parts)
 
-    def _drop_connection(self) -> None:
-        if self._connected:
-            try:
-                self._p4.disconnect()
-            except Exception:  # noqa: BLE001
-                pass
-            self._connected = False
-
     # --- specialised paths -------------------------------------------------
 
     def login_status(self) -> dict | None:
         # No retry — startup probe; an expired ticket isn't fixed by
         # trying again.
         try:
-            self._ensure_connected()
-            rows = self._p4.run_login("-s")
-        except self._P4.P4Exception:
+            with self._connection() as p4:
+                rows = p4.run_login("-s")
+        except P4Exception:
             return None
         if not rows:
             return None
@@ -543,20 +692,15 @@ class _PythonBackend(_Backend):
 
     def fetch_form(self, kind: str, key: str | None = None) -> dict:
         """Delegate to P4Python's ``fetch_<kind>(key)`` accessor."""
-        self._ensure_connected()
         method_name = f"fetch_{kind}"
-        try:
-            method = getattr(self._p4, method_name)
-        except AttributeError as e:
-            raise P4Exception(
-                f"P4Python has no {method_name}; cannot fetch form"
-            ) from e
-        try:
+        with self._connection() as p4:
+            try:
+                method = getattr(p4, method_name)
+            except AttributeError as e:
+                raise P4Exception(
+                    f"P4Python has no {method_name}; cannot fetch form"
+                ) from e
             return method(key) if key is not None else method()
-        except self._P4.P4Exception as e:
-            if _is_connection_error(e):
-                self._drop_connection()
-            raise P4Exception(str(e)) from e
 
     def save_form(
         self,
@@ -566,17 +710,12 @@ class _PythonBackend(_Backend):
         force: bool = False,
     ) -> list:
         """Push form back via P4Python's `input=` + `run("<kind>", "-i" [, "-f"])`."""
-        self._ensure_connected()
-        self._p4.input = form
         args: list[str] = [kind, "-i"]
         if force:
             args.insert(1, "-f")
-        try:
-            return list(self._p4.run(*args))
-        except self._P4.P4Exception as e:
-            if _is_connection_error(e):
-                self._drop_connection()
-            raise P4Exception(str(e)) from e
+        with self._connection() as p4:
+            p4.input = form
+            return list(p4.run(*args))
 
     def grep_stream(
         self,
@@ -593,25 +732,27 @@ class _PythonBackend(_Backend):
         # at `self._grep_handler_cls` so a typing-storm of grep calls
         # doesn't pay the class-construction cost N times. Per-call
         # state (count, callbacks, cap) lives on the handler instance,
-        # not the class, so re-use is safe.
+        # not the class, so re-use is safe. The handler is set on the
+        # *leased* connection's P4 object, so a concurrent grep + tree
+        # expand don't fight over one shared `handler` attribute.
         flags = ["-s", "-n"]
         if case_insensitive:
             flags.append("-i")
-        try:
-            self._ensure_connected()
-        except P4Exception:
-            return 0
         handler_cls = self._get_or_build_grep_handler_cls()
         handler = handler_cls(on_match, cancelled, max_matches)
-        prev = getattr(self._p4, "handler", None)
-        self._p4.handler = handler
         try:
-            try:
-                self._p4.run("grep", *flags, "-e", pattern, scope)
-            except self._P4.P4Exception:
-                pass
-        finally:
-            self._p4.handler = prev
+            with self._connection() as p4:
+                prev = getattr(p4, "handler", None)
+                p4.handler = handler
+                try:
+                    try:
+                        p4.run("grep", *flags, "-e", pattern, scope)
+                    except self._P4.P4Exception:
+                        pass
+                finally:
+                    p4.handler = prev
+        except P4Exception:
+            return handler.count
         return handler.count
 
     def _get_or_build_grep_handler_cls(self):
@@ -657,8 +798,13 @@ class _PythonBackend(_Backend):
         return _Handler
 
     def version_info(self) -> str:
+        # Reading api_level needs a connected socket; lease one (which
+        # also warms the pool) and tolerate any failure with the bare
+        # name. Called once at startup for the `Backend: …` log line.
+        ver = ""
         try:
-            ver = self._p4.api_level
+            with self._connection() as p4:
+                ver = p4.api_level
         except Exception:  # noqa: BLE001
             ver = ""
         return f"P4Python (api {ver})" if ver else "P4Python"
@@ -1479,15 +1625,19 @@ class P4Service:
         # state-change window.
         #
         # `_call_sem` (BoundedSemaphore sized by backend): guards
-        # `run_tagged` / `run_text` / form calls. Python backend uses
-        # 1 permit (P4Python's connection isn't thread-safe);
-        # CLI backend uses N (each subprocess is independent, so we
-        # let parallel UI fan-outs run concurrently). N is
-        # configurable via P4V_CLI_CONCURRENCY.
+        # `run_tagged` / `run_text` / form calls. Both backends now run
+        # N calls concurrently (default 4): the CLI backend forks N
+        # independent subprocesses, and the Python backend leases from a
+        # pool of N independent `P4.P4()` connections (one P4 object per
+        # thread is the supported pattern; sharing one socket across
+        # threads is not). N is `P4V_PY_CONCURRENCY` / `P4V_CLI_CONCURRENCY`.
+        # This is what keeps the UI responsive when one command is slow —
+        # a laggy `print`/`filelog`/sync chunk occupies a single permit +
+        # connection instead of blocking every other p4 call behind it.
         #
         # Why two locks: a long-running call shouldn't block a quick
         # connection state check, and a connect-time race shouldn't
-        # block legitimate parallel reads on the CLI backend.
+        # block legitimate parallel reads.
         self._connect_lock = threading.Lock()
         self._call_sem = threading.BoundedSemaphore(
             max(1, self._backend.max_concurrent_calls),
@@ -1496,6 +1646,16 @@ class P4Service:
         # _run_resilient call records start/end so users can inspect
         # what's running and what just ran.
         self._cmd_log = cmd_log
+        # Optional service-level reconnect callbacks (perceived
+        # performance). When set, _run_resilient falls back to these for
+        # any call that doesn't pass its own on_retry: ``_on_retry`` fires
+        # once per reconnect attempt, and ``_on_recover`` fires once when a
+        # call that *had* to retry finally succeeds — letting the UI
+        # surface "reconnecting…" and clear it on recovery. Both default
+        # to None (no behaviour change). Callbacks run on the worker
+        # thread; the UI layer is responsible for marshalling.
+        self._on_retry: RetryCallback | None = None
+        self._on_recover: Callable[[], None] | None = None
 
     # --- introspection -----------------------------------------------------
 
@@ -1595,6 +1755,12 @@ class P4Service:
         log_id: int | None = None
         if self._cmd_log is not None:
             log_id = self._cmd_log.begin_command(tuple(args))
+        # Per-call on_retry wins; otherwise fall back to the service-level
+        # default so the UI can surface reconnects without threading a
+        # callback through every call site. ``retried`` lets us fire the
+        # recover hook only when a call actually had to reconnect.
+        retry_cb = on_retry if on_retry is not None else self._on_retry
+        retried = False
         for attempt in range(1, max_attempts + 1):
             try:
                 # Ensure connection under the short mutex first, then
@@ -1614,6 +1780,13 @@ class P4Service:
                         result = self._backend.run_tagged(args)
                 if log_id is not None:
                     self._cmd_log.end_command(log_id, failed=False)
+                # If this call had to reconnect along the way and then
+                # succeeded, tell the UI it's back.
+                if retried and self._on_recover is not None:
+                    try:
+                        self._on_recover()
+                    except Exception:  # noqa: BLE001
+                        pass
                 return result
             except P4Exception as e:
                 last_exc = e
@@ -1624,9 +1797,10 @@ class P4Service:
                             log_id, failed=True, error=str(e),
                         )
                     raise
-                if on_retry is not None:
+                retried = True
+                if retry_cb is not None:
                     try:
-                        on_retry(attempt, max_attempts, e)
+                        retry_cb(attempt, max_attempts, e)
                     except Exception:  # noqa: BLE001
                         # Never let a UI callback take down the worker.
                         pass

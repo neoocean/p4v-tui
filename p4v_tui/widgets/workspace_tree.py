@@ -8,7 +8,7 @@ from __future__ import annotations
 from textual.binding import Binding
 
 from ..messages import FileActionRequested
-from ..utils import truncate_cells
+from ..utils import is_deleted_at_head, truncate_cells
 from .context_menu import ContextMenuItem, ContextMenuModal, SEPARATOR
 from .p4_tree import LABEL_MAX_CELLS, P4Tree
 
@@ -45,8 +45,8 @@ def _status_marker(row: dict) -> str:
             return "*"  # out of date
     except (TypeError, ValueError):
         pass
-    if head_action == "delete":
-        return "x"  # head is deleted; local copy is stale
+    if is_deleted_at_head(head_action):
+        return "x"  # head is gone (delete / move/delete / …); copy is stale
     return " "  # synced, no pending action
 
 
@@ -224,9 +224,9 @@ class WorkspaceTree(P4Tree):
             ContextMenuItem("Lock", "lock", "Ctrl+L"),
             ContextMenuItem("Unlock", "unlock", "Ctrl+U"),
             SEPARATOR,
-            ContextMenuItem("Reconcile Offline Work (chunked)",
+            ContextMenuItem("Reconcile Offline Work…",
                             "chunked_reconcile", ""),
-            ContextMenuItem("Clean (chunked)", "chunked_clean", ""),
+            ContextMenuItem("Clean…", "chunked_clean", ""),
             SEPARATOR,
             ContextMenuItem("Merge/Integrate Files…", "integrate", ""),
             ContextMenuItem("Copy Files…", "copy", ""),

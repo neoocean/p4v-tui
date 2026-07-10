@@ -33,10 +33,10 @@
 | 항목 | 기존 (P4Python) | CLI fallback |
 |---|---|---|
 | import 의존성 | `P4` 모듈 (C 확장) | 없음. `subprocess` 만 |
-| 호출당 비용 | 1 connection 재사용, in-process | 매 호출 fork+exec+TCP+auth |
+| 호출당 비용 | connection 풀 재사용(기본 4), in-process | 매 호출 fork+exec+TCP+auth |
 | 호출당 지연 (로컬 서버) | ~2-10 ms | ~50-100 ms (3-10×) |
 | 호출당 지연 (원격, RTT 80 ms) | ~80-150 ms | ~200-500 ms |
-| Threading | 단일 P4 인스턴스 lock | 호출별 독립 subprocess |
+| Threading | P4 인스턴스 풀(스레드당 1개) | 호출별 독립 subprocess |
 | 인증 | P4TICKETS / SSO 사전 완료 | 동일 |
 | 의존 binary | `p4` (실행 시) + Python 모듈 | `p4` 만 |
 | streaming output | `OutputHandler` 콜백 | `Popen` stdout readline |
@@ -495,12 +495,20 @@ True connection 재사용 대신 구현한 perf 개선:
 * **동시 subprocess 실행** : 기존 `P4Service._lock` 단일 mutex 를
   `_connect_lock` (connect/disconnect 짧은 mutex) + `_call_sem`
   (BoundedSemaphore(N)) 두 단계로 분리.
-  - Python backend : N=1 (P4Python in-process 연결이 thread-safe
-    하지 않음 — 기존 시맨틱 유지).
+  - Python backend : N=`P4V_PY_CONCURRENCY` (기본 4). 단일 `P4.P4()`
+    소켓은 thread-safe 하지 않으므로, **독립 연결 풀**(스레드당 P4
+    인스턴스 1개 — P4Python 이 지원하는 패턴)을 두고 호출마다 하나씩
+    리스한다(`_PyConn` / `_acquire` / `_release` / `_connection`).
+    이전엔 N=1 로 단일 연결을 직렬화했는데, 그 결과 느린 명령 하나가
+    다른 모든 p4 호출을 막아 앱이 멈춘 것처럼 느껴졌다(CL 57599 에서
+    풀로 전환해 수정). `1` 로 두면 과거의 직렬 동작으로 복귀.
   - CLI backend : N=`P4V_CLI_CONCURRENCY` (기본 4) — 각
     subprocess 가 독립이므로 병렬 실행 안전. Tree expand 시 fan-
     out 된 `dirs` + `files` + `fstat` 가 직렬화되지 않고 동시에
     진행돼 cold-cache UI 응답이 체감 빨라짐.
+  - 즉 두 backend 모두 *독립 연결*(Python=풀, CLI=subprocess)로
+    동시성을 얻으며, 공유 연결은 쓰지 않는다. 느린 명령 하나는 자기
+    연결 하나만 점유하므로 UI 반응성이 유지된다.
   - `_Backend.max_concurrent_calls` 클래스 변수로 각 backend 가
     자기 동시성 수준을 선언, façade 는 그대로 받아서 BoundedSem
     크기로 사용.

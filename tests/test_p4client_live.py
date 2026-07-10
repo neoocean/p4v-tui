@@ -163,19 +163,28 @@ def test_grep_stream_delivers_matches(live_backend):
 
 
 def test_grep_stream_cancellation_short_circuits(live_backend):
-    """A `cancelled=True` callback must stop delivery quickly."""
+    """A `cancelled=True` callback must stop delivery — asserted by the
+    *count* delivered, not the wall clock.
+
+    Both backends poll `cancelled()` per match *before* delivering
+    (python: `outputStat`; cli: the top of the read loop, plus the
+    watcher thread). This `cancelled()` flips True on its 2nd call, so
+    at most the first match is ever delivered: verified live as n=1
+    (python) / n=0 (cli — its watcher may consume the first poll before
+    any row arrives). Either way it's far below the thousands a full run
+    of this hot pattern would yield.
+
+    The old form asserted `elapsed < 15s`, but for a sparse-at-the-start
+    scope like this that budget mostly measures the server's scan
+    latency to the *first* match (seconds on a big depot) — unrelated to
+    cancellation — and so flaked under CPU load. The count is
+    load-independent.
+    """
     matches: list[dict] = []
-    # Match a hot pattern likely to hit thousands of files — without
-    # cancellation this would deliver many rows; with it, we should
-    # see ≤ a handful before the loop breaks. Exact count is racy
-    # (the first row may already be in flight), so we only assert
-    # "≤ max_matches" and "didn't hang for ages".
-    import time
     cancel_after = [0]
     def cancelled():
         cancel_after[0] += 1
         return cancel_after[0] > 1  # bail after the first check
-    started = time.monotonic()
     n = live_backend.grep_stream(
         "import",
         "//.../*.py",
@@ -184,15 +193,8 @@ def test_grep_stream_cancellation_short_circuits(live_backend):
         case_insensitive=True,
         max_matches=5000,
     )
-    elapsed = time.monotonic() - started
-    assert n <= 5000, f"max_matches must cap delivery (got {n})"
-    # Wall-clock budget — cancellation should fire well within a few
-    # seconds even on a slow remote depot. With the watcher thread
-    # (CL 4) the CLI backend kills the subprocess within
-    # `_GREP_CANCEL_POLL_S` of cancellation, so the wall-clock budget
-    # could be tightened, but we leave the generous bound to avoid
-    # flakiness on slow CI / a slow first match arriving.
-    assert elapsed < 15.0, f"cancellation didn't bail fast ({elapsed:.1f}s)"
+    assert n == len(matches), "n must equal callbacks delivered"
+    assert n <= 1, f"cancel after the first check must stop delivery (got {n})"
 
 
 def test_grep_stream_repeated_calls_isolate_state(live_backend):
@@ -232,53 +234,52 @@ def test_grep_stream_repeated_calls_isolate_state(live_backend):
     assert n2 == len(second_matches), f"second: {n2} vs {len(second_matches)}"
 
 
-def test_grep_stream_watcher_promptly_kills_on_late_cancel(live_backend):
-    """Cancellation that fires AFTER the main loop is already blocked
-    on marshal.load(proc.stdout) must still take effect promptly.
+def test_grep_stream_cancel_mid_stream_stops_at_that_point(live_backend):
+    """A cancel raised partway through delivery stops the stream right
+    there — asserted by the *count* delivered, load-independently.
 
-    Before the watcher thread (CL 4), this scenario could take seconds
-    on a slow grep with sparse matches — marshal.load was blocked
-    until the next row arrived. With the watcher, kill() races the
-    next row and we see EOFError within ~`_GREP_CANCEL_POLL_S`.
+    The previous form fired the cancel on a 0.3 s background timer and
+    asserted an absolute wall-clock budget (≈ "the watcher killed the
+    subprocess fast"). But the elapsed time is dominated by the server's
+    scan latency to the first `import` match in `//.../*.py` (~seconds on
+    this depot — verified), which has nothing to do with cancellation,
+    and that flaked under CPU starvation. Worse, for the python backend
+    there is no subprocess to kill, so cancellation can only take effect
+    at a match boundary anyway.
 
-    We can't easily reproduce "main loop blocked on marshal.load"
-    deterministically against a live server (it depends on server
-    response timing), so this test approximates by:
-      1. Issuing a grep against a hot pattern that takes the server
-         tens of ms per page.
-      2. Setting cancelled=True after a short sleep on a background
-         thread so the cancel happens while the main loop is most
-         likely mid-marshal.load.
-      3. Asserting overall wall-clock stays small.
+    So instead we cancel from inside the match stream, exactly after the
+    `K`-th delivery. Both backends poll `cancelled()` per match before
+    delivering the next one, so the stream stops at precisely `K`
+    (verified live: n=K on both python and cli). That's deterministic
+    and CPU-load-independent, and still proves the cancel short-circuits
+    a stream that would otherwise run to the `max_matches` cap.
+
+    (The watcher thread's distinct job — a prompt kill while the cli
+    main loop is *blocked* in marshal.load on a sparse grep — isn't
+    deterministically reproducible against a live server; covering it
+    would want a focused fake-subprocess unit test, noted as follow-up.)
     """
-    import threading
-    import time
-    cancel_now = threading.Event()
+    K = 100
+    MAXM = 10000
     matches: list[dict] = []
+    cancel_flag = [False]
 
-    def fire_cancel():
-        # Wait until the main loop has had time to start blocking on
-        # marshal.load, then cancel.
-        time.sleep(0.3)
-        cancel_now.set()
+    def on_match(row):
+        matches.append(row)
+        if len(matches) >= K:
+            cancel_flag[0] = True
 
-    fire_thread = threading.Thread(target=fire_cancel, daemon=True)
-    fire_thread.start()
-    started = time.monotonic()
-    live_backend.grep_stream(
+    n = live_backend.grep_stream(
         "import",
         "//.../*.py",
-        on_match=lambda r: matches.append(r),
-        cancelled=cancel_now.is_set,
+        on_match=on_match,
+        cancelled=lambda: cancel_flag[0],
         case_insensitive=True,
-        max_matches=10000,
+        max_matches=MAXM,
     )
-    elapsed = time.monotonic() - started
-    fire_thread.join(timeout=1)
-    # Budget: 0.3 s for the fire_cancel sleep + at most ~0.2 s for
-    # the watcher to notice + ~0.5 s slop for kill/wait. 5 s is a
-    # very loose ceiling that still proves we're not waiting for the
-    # whole grep to finish (which on a busy depot would be 10+ s).
-    assert elapsed < 5.0, (
-        f"watcher didn't kill subprocess fast enough ({elapsed:.2f}s)"
-    )
+    assert n == len(matches), "n must equal callbacks delivered"
+    # Stops at the cancel point, never reaching the cap. A tiny slop
+    # guards against any backend delivering one already-decoded row
+    # before re-checking; the live-verified value is exactly K.
+    assert K <= n <= K + 5, f"cancel mid-stream should stop near {K} (got {n})"
+    assert n < MAXM, f"must stop short of the {MAXM} cap (got {n})"

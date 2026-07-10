@@ -113,6 +113,33 @@ base_url = "http://your-swarm-host"
 # args    = "{path}"
 
 
+# --- External merge tool (Resolve → Ctrl+T) ----------------------------
+#
+# An external 3-way merge tool (e.g. P4Merge) launched from the Resolve
+# modal with Ctrl+T on the cursor file. Complements the in-app Ctrl+E
+# editor — leave this out and Ctrl+T just tells you it's unconfigured.
+#
+# `command` is the executable (PATH-resolved or absolute). `args` is a
+# template with these placeholders, written to temp files by p4v-tui:
+#
+#   {base}    → common-ancestor version
+#   {theirs}  → the incoming (their) version
+#   {yours}   → your workspace version
+#   {merge}   → the OUTPUT file; the tool must write the merged result
+#               here, and p4v-tui reads it back to resolve the file
+#
+# Empty args defaults to P4Merge's CLI order:
+#   "{base} {theirs} {yours} {merge}"
+#
+# p4v-tui BLOCKS while the tool runs; finish + save in the tool, then
+# close it. A non-zero exit (or close-without-save) keeps your version.
+#
+# [merge_tool]
+# name    = "P4Merge"
+# command = "p4merge"
+# args    = "{base} {theirs} {yours} {merge}"
+
+
 # --- Chunking strategy (optional) --------------------------------------
 #
 # Bulk operations (sync, force-sync, reconcile, clean, revert) are
@@ -186,3 +213,28 @@ base_url = "http://your-swarm-host"
 #     { kind = "p4",     args   = ["changes", "-s", "pending", "-u", "alice"] },
 #     { kind = "notify", message = "Refreshed — open Pending tab" },
 # ]
+
+
+# --- Narrow-terminal navigator (optional) ------------------------------
+#
+# On a phone-sized / thin viewport (iPhone Blink, an SSH session off a
+# mobile keyboard, a thin tmux split) p4v-tui auto-enters "narrow mode":
+# one full-screen page at a time, cycled with Tab / Shift+Tab in the
+# order tree -> pending -> history -> submitted -> log -> (wrap). These
+# knobs trim that cycle so you don't Tab through pages you never use.
+#
+# [narrow]
+# # Panel pages to drop from the cycle entirely. Valid names:
+# # "pending", "history", "submitted". ("tree" and "log" are always
+# # kept and can't be disabled.)
+# disabled_pages = ["history", "submitted"]
+# # When true, a panel page whose table has no rows this session is
+# # skipped too (and re-included the moment it gains rows).
+# skip_empty = true
+# # Pin the layout instead of deciding from terminal width:
+# #   "auto"   — narrow below ~100 cells, wide above (default)
+# #   "narrow" — always the single-page navigator (e.g. a thin-but-wide
+# #              tmux pane where you want it anyway)
+# #   "wide"   — always the full four-region layout
+# # Runtime-togglable with Ctrl+Shift+N; this is just the startup default.
+# layout = "auto"

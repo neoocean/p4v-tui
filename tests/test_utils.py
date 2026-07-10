@@ -7,7 +7,12 @@ from __future__ import annotations
 
 from rich.cells import cell_len
 
-from p4v_tui.utils import first_nonblank_line, format_eta, truncate_cells
+from p4v_tui.utils import (
+    first_nonblank_line,
+    format_eta,
+    is_creation_action,
+    truncate_cells,
+)
 
 
 class TestFirstNonblankLine:
@@ -72,3 +77,33 @@ class TestTruncateCells:
     def test_budget_smaller_than_ellipsis(self):
         # Custom multi-cell ellipsis wider than the budget.
         assert truncate_cells("long text here", 1, ellipsis="..") == "."
+
+
+class TestIsCreationAction:
+    def test_plain_creations(self):
+        assert is_creation_action("add") is True
+        assert is_creation_action("branch") is True
+        assert is_creation_action("import") is True
+
+    def test_move_add_is_creation(self):
+        # the edge case: a rename's destination. A naive
+        # `in ("add","branch")` missed it, so a move/add onto a
+        # resurrected path (rev > 1) got an empty/wrong "previous rev".
+        assert is_creation_action("move/add") is True
+
+    def test_any_slash_add_variant(self):
+        assert is_creation_action("branch/add") is True
+
+    def test_non_creation_actions(self):
+        for a in ("edit", "integrate", "delete", "move/delete",
+                  "purge", "archive"):
+            assert is_creation_action(a) is False, a
+
+    def test_move_delete_is_not_creation(self):
+        # guards against an over-broad rule sweeping the rename SOURCE
+        assert is_creation_action("move/delete") is False
+
+    def test_whitespace_and_empty_and_none(self):
+        assert is_creation_action("  move/add  ") is True
+        assert is_creation_action("") is False
+        assert is_creation_action(None) is False  # type: ignore[arg-type]

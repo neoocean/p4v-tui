@@ -51,6 +51,23 @@ class ExternalEditor:
 
 
 @dataclass
+class MergeTool:
+    """External 3-way merge tool (e.g. P4Merge) for the Resolve flow.
+
+    ``command`` is the executable (PATH-resolved or absolute). ``args`` is
+    a template with ``{base}`` / ``{theirs}`` / ``{yours}`` / ``{merge}``
+    placeholders for the four temp files the resolve flow hands it; an
+    empty template defaults to P4Merge's CLI order
+    ``"{base} {theirs} {yours} {merge}"``. The tool writes the merged
+    result to ``{merge}`` and the resolve flow reads it back. Inert when
+    ``command`` is unset (the in-app Ctrl+E editor still works).
+    """
+    command: str = ""
+    args: str = ""
+    name: str = "Merge tool"
+
+
+@dataclass
 class MacroStep:
     """Single step in a user-defined macro.
 
@@ -118,6 +135,31 @@ class JiraConfig:
 
 
 @dataclass
+class NarrowConfig:
+    """Tuning for the narrow-terminal single-page navigator.
+
+    On a phone-sized viewport the navigator cycles a set of full-screen
+    "pages" (``tree → pending → history → submitted → log``). These knobs
+    trim that cycle so a mobile user doesn't ``Tab`` through pages they
+    never use:
+
+    - ``disabled_pages`` — panel pages the user wants permanently out of
+      the cycle (``[narrow] disabled_pages = ["history", "submitted"]``).
+      ``tree`` and ``log`` are always kept and can't be disabled.
+    - ``skip_empty`` — when true, a panel page whose table has no rows
+      this session is skipped too (re-included the moment it gains rows).
+    - ``layout`` — ``auto`` (decide narrow vs wide from terminal width,
+      the default), or ``narrow`` / ``wide`` to pin the choice (e.g. a
+      thin-but-wide tmux pane where you want the single-page navigator
+      anyway). Runtime-togglable; the config value is just the startup
+      default.
+    """
+    disabled_pages: list[str] = field(default_factory=list)
+    skip_empty: bool = False
+    layout: str = "auto"
+
+
+@dataclass
 class Config:
     connection: ConnectionConfig
     profiles: list[ConnectionConfig]  # explicit [[profile]] entries
@@ -126,6 +168,8 @@ class Config:
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
     external_editors: list[ExternalEditor] = field(default_factory=list)
     macros: list[MacroConfig] = field(default_factory=list)
+    merge_tool: MergeTool | None = None  # [merge_tool] external 3-way tool
+    narrow: NarrowConfig = field(default_factory=NarrowConfig)
     source: Path | None = None  # which file we loaded from, or None if env-only
     error: str | None = None    # parse error message, if any
 
@@ -139,6 +183,7 @@ class Config:
             chunking=ChunkingConfig(),
             external_editors=[],
             macros=[],
+            narrow=NarrowConfig(),
         )
 
 
@@ -215,6 +260,7 @@ def load_config(explicit_path: str | Path | None = None) -> Config:
             },
         )
         chunking = _parse_chunking(data.get("chunking", {}) or {})
+        narrow = _parse_narrow(data.get("narrow", {}) or {})
         editors_raw = data.get("external_editor", []) or []
         if isinstance(editors_raw, dict):
             editors_raw = [editors_raw]
@@ -227,6 +273,14 @@ def load_config(explicit_path: str | Path | None = None) -> Config:
             for e in editors_raw
             if isinstance(e, dict) and e.get("command")
         ]
+        mt_raw = data.get("merge_tool", {}) or {}
+        merge_tool = None
+        if isinstance(mt_raw, dict) and mt_raw.get("command"):
+            merge_tool = MergeTool(
+                command=str(mt_raw.get("command") or ""),
+                args=str(mt_raw.get("args") or ""),
+                name=str(mt_raw.get("name") or "Merge tool"),
+            )
         macros_raw = data.get("macro", []) or []
         if isinstance(macros_raw, dict):
             macros_raw = [macros_raw]
@@ -274,6 +328,8 @@ def load_config(explicit_path: str | Path | None = None) -> Config:
             chunking=chunking,
             external_editors=external_editors,
             macros=macros,
+            merge_tool=merge_tool,
+            narrow=narrow,
             source=path,
         )
     return Config.empty()
@@ -367,6 +423,15 @@ def write_config(cfg: Config, path: str | Path) -> Path:
                 chunks.append(line)
         chunks.append("")
 
+    # [merge_tool] — external 3-way merge tool for Resolve
+    if cfg.merge_tool and cfg.merge_tool.command:
+        chunks.append("[merge_tool]")
+        for k in ("name", "command", "args"):
+            line = _emit_str(k, getattr(cfg.merge_tool, k))
+            if line:
+                chunks.append(line)
+        chunks.append("")
+
     # [chunking]  — default first, then per-job sub-tables
     if cfg.chunking:
         d = cfg.chunking.default
@@ -435,6 +500,46 @@ def _parse_chunking(raw: dict) -> ChunkingConfig:
         job_kind = str(key).strip().lower()
         per_job[job_kind] = ChunkingStrategy.from_dict(val, fallback=default)
     return ChunkingConfig(default=default, per_job=per_job)
+
+
+def _parse_narrow(raw: dict) -> NarrowConfig:
+    """Build a :class:`NarrowConfig` from the ``[narrow]`` table.
+
+      [narrow]
+      disabled_pages = ["history", "submitted"]
+      skip_empty = true
+
+    Unknown page names are dropped, and ``tree`` / ``log`` are filtered
+    out of ``disabled_pages`` since the navigator never lets those leave
+    the cycle (see ``narrow_nav.ALWAYS_ON_PAGES``). Order is preserved
+    and duplicates are collapsed.
+    """
+    from . import narrow_nav as _nn
+
+    if not isinstance(raw, dict):
+        return NarrowConfig()
+    raw_pages = raw.get("disabled_pages", []) or []
+    if not isinstance(raw_pages, list):
+        raw_pages = []
+    seen: set[str] = set()
+    disabled: list[str] = []
+    for p in raw_pages:
+        name = str(p).strip().lower()
+        if (
+            name in _nn.NARROW_PAGES
+            and name not in _nn.ALWAYS_ON_PAGES
+            and name not in seen
+        ):
+            seen.add(name)
+            disabled.append(name)
+    layout = str(raw.get("layout", "auto")).strip().lower()
+    if layout not in _nn.LAYOUT_MODES:
+        layout = "auto"
+    return NarrowConfig(
+        disabled_pages=disabled,
+        skip_empty=bool(raw.get("skip_empty", False)),
+        layout=layout,
+    )
 
 
 def build_swarm_url(

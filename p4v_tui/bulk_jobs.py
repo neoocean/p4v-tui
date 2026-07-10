@@ -249,3 +249,77 @@ class ChunkedCleanJob(_ChunkedSubdirJob):
 
     _COMMAND_NAME = "Clean"
     _COMMAND_ARGS = ("clean",)
+
+
+class _ChunkedExplicitFilesJob(Job):
+    """Run a reconcile/clean-style command on an *explicit* file list.
+
+    Used by the interactive Reconcile / Clean flow: the user picks a
+    subset of the dry-run preview, and we run the operation on exactly
+    those paths (batched to keep the command line bounded) rather than
+    walking subdirectories. Passing explicit specs preserves the
+    add/edit/delete cases — ``p4 reconcile -a -e -d <file...>`` and
+    ``p4 clean <file...>`` accept individual paths, including local
+    files unknown to the depot (adds) and depot files missing locally
+    (deletes), as long as the spec is the *client* path the preview
+    reported.
+
+    Unlike the subdir job there is no enumerate step — the files are
+    known up front — so ``total_chunks`` is fixed at construction.
+    """
+
+    _COMMAND_NAME = ""
+    _COMMAND_ARGS: tuple = ()
+    _BENIGN_FRAGMENTS = _ChunkedSubdirJob._BENIGN_FRAGMENTS
+
+    def __init__(
+        self,
+        p4: P4Service,
+        files: list[str],
+        batch_size: int | None = None,
+    ) -> None:
+        super().__init__(name=f"{self._COMMAND_NAME} {len(files)} file(s)")
+        self._p4 = p4
+        self._files = list(files)
+        self._batch = max(1, int(batch_size or DEFAULT_BATCH_SIZE))
+        self._strategy = ChunkingStrategy(
+            mode="count", files_per_chunk=self._batch,
+        )
+        # No enumerate chunk; just the batches.
+        self.total_chunks = max(
+            1, (len(self._files) + self._batch - 1) // self._batch,
+        )
+
+    @property
+    def strategy(self) -> ChunkingStrategy:
+        return self._strategy
+
+    def chunks(self) -> Iterator[Callable[[], None]]:
+        for i in range(0, len(self._files), self._batch):
+            batch = self._files[i:i + self._batch]
+            yield (lambda b=batch: self._run_batch(b))
+
+    def _run_batch(self, batch: list[str]) -> None:
+        if not batch:
+            return
+        try:
+            self._p4.run(*self._COMMAND_ARGS, *batch)
+        except P4Exception as e:
+            msg = str(e).lower()
+            if any(frag in msg for frag in self._BENIGN_FRAGMENTS):
+                return
+            raise
+
+
+class ReconcileFilesJob(_ChunkedExplicitFilesJob):
+    """``p4 reconcile -a -e -d <file...>`` on an explicit picked subset."""
+
+    _COMMAND_NAME = "Reconcile"
+    _COMMAND_ARGS = ("reconcile", "-a", "-e", "-d")
+
+
+class CleanFilesJob(_ChunkedExplicitFilesJob):
+    """``p4 clean <file...>`` on an explicit picked subset. Destructive."""
+
+    _COMMAND_NAME = "Clean"
+    _COMMAND_ARGS = ("clean",)

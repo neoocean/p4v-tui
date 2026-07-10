@@ -90,6 +90,12 @@ CLI 백엔드 튜닝 환경 변수(모두 선택):
 | `P4V_CLI_CONCURRENCY` | `4` | 동시에 실행 가능한 `p4` subprocess 수(tree expand fan-out 가속) |
 | `P4V_CLI_READ_CACHE_TTL` | `30` | `info` / `client -o` 같은 idempotent read 캐시 TTL(초). 0 = 비활성 |
 
+P4Python(기본) 백엔드 튜닝:
+
+| 변수 | 기본 | 의미 |
+|---|---|---|
+| `P4V_PY_CONCURRENCY` | `4` | P4Python 연결 풀 크기 = 동시 실행 가능한 p4 호출 수. 느린 명령 하나가 다른 p4 작업을 막지 않게 함. `1` = 과거의 단일 연결(직렬) 동작 |
+
 기동 직후 활성 백엔드가 Log 패널과 타이틀바에 표시됩니다("Backend:
 P4Python (api 99)" / "Backend: p4 CLI …"). 버그 보고 시 이 줄을 첨부하세요.
 기능·결과 형식은 두 백엔드가 동일합니다(`tests/test_p4client_live.py` 의

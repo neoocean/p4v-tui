@@ -39,7 +39,19 @@ class _DetailMixin:
         #               same read-only viewer fits — folder history's
         #               first column is the change number, file
         #               history puts it in column 1 (column 0 is rev).
+        #   detail_files → open the selected depot file in FileViewerModal.
         table_id = event.data_table.id
+        if table_id == "detail_files":
+            try:
+                row = event.data_table.get_row_at(event.cursor_row)
+            except Exception:  # noqa: BLE001
+                return
+            if not row:
+                return
+            depot_file = str(row[0])
+            if depot_file.startswith("//"):
+                self._open_file_viewer(depot_file)
+            return
         if table_id not in (
             "pending_table", "submitted_table", "history_table",
         ):

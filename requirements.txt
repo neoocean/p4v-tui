@@ -1,5 +1,10 @@
 textual>=8.0
 
+# Pillow decodes image depot files for the in-app half-block ANSI-art
+# preview (image_preview.py). Optional at runtime: the viewer falls back
+# to a hex dump with a warning toast when Pillow can't import or decode.
+Pillow>=10.0
+
 # P4Python is the preferred backend (lowest per-call latency).
 # It's optional — when the C-extension wheel can't be installed,
 # p4v-tui automatically falls back to the `p4` CLI as long as the

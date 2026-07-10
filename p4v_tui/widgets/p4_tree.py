@@ -59,6 +59,11 @@ def _next_segment(parent: str, target: str) -> str | None:
     return f"{parent}/{head}"
 
 
+def _basename(path: str) -> str:
+    """Last path component, tolerant of both ``/`` and ``\\`` separators."""
+    return (path or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
 class P4Tree(Tree[str]):
     BINDINGS = [
         Binding("right", "expand_node", "Expand", show=False),
@@ -247,16 +252,36 @@ class P4Tree(Tree[str]):
             next_path = _next_segment(node.data or "", target)
             if next_path is None:
                 return node
-            match = None
-            for child in node.children:
-                if (child.data or "") == next_path:
-                    match = child
-                    break
+            match = self._match_child(node, next_path, target)
             if match is None:
                 return node
             node = match
             if (node.data or "") == target:
                 return node
+
+    def _match_child(self, node: TreeNode, next_path: str, target: str):
+        """Find the child of ``node`` on the walk toward ``target``.
+
+        Exact ``data == next_path`` first. Then a final-segment fallback:
+        the workspace tree keys directory nodes by *client* syntax
+        (``//<client>/…``) but file leaves by *depot* path
+        (``//depot/…``), so the last segment of a client-syntax target
+        never exact-matches its depot-keyed leaf. When ``next_path`` is
+        the final segment (``== target``) we match a leaf by basename so
+        navigation lands on the file, not its containing directory. Dir
+        nodes always match exactly (same namespace), so this never
+        mis-routes mid-walk, and the depot tree (uniform namespace) hits
+        the exact path first and never reaches the fallback.
+        """
+        for child in node.children:
+            if (child.data or "") == next_path:
+                return child
+        if next_path == target:
+            want = _basename(target)
+            for child in node.children:
+                if not child.allow_expand and _basename(child.data or "") == want:
+                    return child
+        return None
 
     def _move_cursor_to(self, node: TreeNode) -> None:
         """Move the cursor to ``node`` without firing NodeSelected.
@@ -459,6 +484,45 @@ class P4Tree(Tree[str]):
             np = node.data or ""
             if nav_target == np or _next_segment(np, nav_target) is not None:
                 self._navigate_step()
+
+    # --- optimistic per-row action marker (perceived performance) --------
+
+    # Transient glyph prefixed onto a file leaf the moment a
+    # status-changing action is dispatched against it, so the row lights
+    # up immediately on a laggy link instead of sitting unchanged until
+    # the server confirms. We deliberately do NOT predict the end-state
+    # marker (that would risk showing a lie) — this just means "an action
+    # is in flight on this row". The post-action ``reload_node`` rebuilds
+    # the leaf from fresh ``fstat``, which is the reconcile / rollback.
+    PENDING_GLYPH = "⟳ "
+
+    def mark_node_pending(self, node) -> None:
+        """Flag a file-leaf node as 'action in flight'. No-op for
+        folders / root (they reload wholesale) and for an already-flagged
+        node."""
+        try:
+            if node is None or node is self.root or node.allow_expand:
+                return
+            plain = self._plain(node.label)
+            if plain.startswith(self.PENDING_GLYPH):
+                return
+            node.set_label(self.PENDING_GLYPH + plain)
+        except Exception:  # noqa: BLE001
+            # Purely cosmetic — never let it disturb the action itself.
+            pass
+
+    def clear_node_pending(self, node) -> None:
+        """Strip the pending glyph if present (used on an action path
+        that returns before the reconciling reload, e.g. a failed
+        pre-step)."""
+        try:
+            if node is None:
+                return
+            plain = self._plain(node.label)
+            if plain.startswith(self.PENDING_GLYPH):
+                node.set_label(plain[len(self.PENDING_GLYPH):])
+        except Exception:  # noqa: BLE001
+            pass
 
     # --- multi-select marks (item 4) --------------------------------------
 

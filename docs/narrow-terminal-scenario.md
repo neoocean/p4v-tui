@@ -52,6 +52,114 @@ read-only `FileViewerModal` for a row), and the **Log panel is hidden**
 page). On the three panel pages the right-pane `TabbedContent` is
 switched to the matching tab so the correct table is on screen.
 
+### Page indicator (breadcrumb)
+
+With one full-screen page visible and no docked chrome, the user has no
+cue of *where they are* in the cycle. A one-row breadcrumb
+(`#narrow_breadcrumb`, shown only in narrow mode, just under the
+connection bar) renders the effective cycle with each chip **numbered**
+and the current page reverse-highlighted:
+
+```
+  1 tree · 2 pending ·  3 history  · 4 submitted · 5 log
+```
+
+The numbers double as the direct-jump keys (press `3` → History), so the
+breadcrumb is self-documenting. The markup is built by the pure
+`narrow_nav.render_breadcrumb(..., numbered=True, width=…)` (so it follows
+`effective_pages` and is unit-tested without a terminal);
+`P4VApp._update_breadcrumb` shows/hides + refreshes it on every
+visibility pass. It stays visible even on the full-screen `log` page so
+orientation is never lost.
+
+**Width-adaptive (real-device fix).** On a phone in portrait (~46 cols)
+the full strip overflows and the last chip (`5 log`) was clipped off the
+edge — losing the knowledge that Log exists and its jump number. So
+`render_breadcrumb` takes the available width and, when the full labels
+won't fit, falls back to a **compact** form: only the current page keeps
+its label, the rest collapse to bare jump numbers —
+`1 · 2 · 3 · 4 submitted · 5`. "You are here" plus every jump target stay
+visible at any width; full labels return automatically when there's room
+(landscape, a tablet, a wide split).
+
+### Responsive table columns
+
+The right-pane tables carry more columns than fit an 80-cell line
+(Pending: Change · Workspace · User · Date · Description), so the
+Description — the column you actually read — used to be scrolled off the
+right edge on a phone. In narrow mode each table trims to a **subset**
+profile that keeps Description plus an identity column:
+
+| Table | Wide | Narrow |
+|---|---|---|
+| Pending | Change · Workspace · User · Date · Description | **Change · Description** |
+| Submitted | Change · User · Date · Description | **Change · Description** |
+| History (file) | Rev · Change · Action · Date · User · Description | **Rev · Action · Description** |
+| History (folder) | Change · Date · User · Description | **Change · Description** |
+
+The profiles are pure data in `narrow_nav.TABLE_FIELDS` (+
+`column_headers` / `select_cells`, unit-tested); the render methods build
+a `{field: cell}` map per row and select the active profile's cells.
+Columns are rebuilt lazily by `P4VApp._set_table_columns` (only when the
+schema actually changes), and a narrow⇄wide flip re-renders from cached
+rows via `_rerender_tables_for_mode` — no server round-trip.
+
+Two invariants: **column 0 stays the plain identity cell** (`str(row[0])`
+must equal the change/rev for cursor-restore + menu lookups), so on a
+remote Pending CL the `↗` "lives elsewhere" marker — which rides the
+Workspace cell in the wide layout — **moves onto the Description cell** in
+narrow (Workspace is dropped) rather than polluting column 0.
+
+### Page-aware footer hints
+
+The default Textual `Footer` lists *every* app binding (~20), which
+truncates to a useless prefix at 80 cells. In narrow mode it's hidden
+and replaced by `#narrow_footer` — a one-row, page-relevant hint strip
+built by the pure `narrow_nav.render_footer_hints(page, n_pages, width=…)`
+(universal navigator keys + a couple specific to the page: open/search
+on the tree, the row `m`enu + `^S` submit on Pending, …). The jump hint
+shows the real range (`1-3` when pages are trimmed). `P4VApp._update_footer`
+swaps the two on every visibility pass.
+
+**Width-adaptive (real-device fix, same as the breadcrumb).** At ~46 cols
+the full hint set overflowed and clipped mid-word (`q quit` → `q`). Each
+hint now carries a priority; when the strip won't fit, the
+least-important hints are dropped — **as a strict by-importance prefix**,
+so a low-value hint (`1-N jump`, `⌫ tree`) can never survive past a
+higher-value one (`^S submit`) that was dropped. `Tab` (the navigator)
+and `q` (the exit) are the last to go, and the bar never clips a word.
+
+### Pinning the layout (config + runtime)
+
+By default narrow vs wide is decided purely from terminal width
+(`< NARROW_TERMINAL_WIDTH`). That's wrong for a **thin-but-wide** tmux
+pane (≥100 cells but the user wants the single-page navigator anyway),
+or a borderline width that flaps on every resize. The `[narrow] layout`
+pin overrides the width rule: `auto` (default), `narrow`, or `wide`.
+It's seeded from config and **runtime-togglable with `Ctrl+Shift+N`**
+(cycles `auto → narrow → wide`, with a toast). The pure
+`narrow_nav.resolve_narrow_mode(mode, width, threshold)` makes the
+decision; `P4VApp._recompute_narrow_mode` applies it from `on_mount`,
+`on_resize`, and the toggle, so a pin can't be undone by a stray resize.
+
+### Trimming the cycle (config)
+
+The *visible* cycle isn't always all five pages. The navigator walks an
+**effective** page list computed by `narrow_nav.effective_pages()` from
+two inputs (app side: `P4VApp._effective_narrow_pages`):
+
+- `[narrow] disabled_pages` in the TOML config — panel pages
+  (`pending` / `history` / `submitted`) the user never wants on a phone.
+- `[narrow] skip_empty = true` — additionally skips a panel page whose
+  table has no rows this session (re-included the moment it gains rows;
+  the live row count is read by `P4VApp._empty_panel_pages`).
+
+`tree` and `log` (`narrow_nav.ALWAYS_ON_PAGES`) are never droppable, so
+the cycle always has at least those two and the user can't be stranded.
+A `narrow_page` that falls off the effective list (e.g. its table just
+went empty) resolves to the first page on the next `Tab` rather than
+raising.
+
 ## Controls
 
 | Key | Narrow mode | Wide mode |
@@ -60,6 +168,7 @@ switched to the matching tab so the correct table is on screen.
 | `Shift+Tab` | **Previous page** (wraps the other way) | Focus previous pane |
 | `F3` / `Ctrl+W` | Quick-toggle: tree ⇄ the **last-visited** panel page (defaults to Pending the first time) | Focus the right pane |
 | `Backspace` | Return to the `tree` page from anywhere | (consumed by focused widget) |
+| `1`…`9` | **Jump** straight to that position in the cycle (the breadcrumb numbers each chip, so the digit to press is visible) | (typed into focused widget) |
 | `Ctrl+→` / `Ctrl+←` | Next / previous page — **desktop alias** for `Tab` / `Shift+Tab` | Next / previous right-pane tab |
 
 ### Why `Tab` is the primary driver (not `Ctrl+Arrow`)
@@ -79,13 +188,44 @@ key); `F3` / `Ctrl+W` is the **fast** path for the common "pop over to my
 CLs and come straight back to the tree" round trip without stepping
 through History / Submitted / Log.
 
+> **Implementation note — why `Tab` is intercepted in `on_key`, not just
+> bound.** Textual's `Screen` binds `tab` / `shift+tab` to
+> `app.focus_next` / `app.focus_previous`, and the screen sits *below*
+> the app in the binding-resolution chain — so a plain app-level
+> `tab → smart_tab` binding is **shadowed and never fires** (the whole
+> point of the narrow navigator silently did nothing before this was
+> found via the e2e pilot). `P4VApp.on_key` therefore intercepts the raw
+> `Tab` before the default focus binding runs, but only in narrow mode,
+> only on the base screen (`len(screen_stack) == 1`, so modals keep their
+> own Tab handling), and never when a text `Input` is focused (so the
+> tree-filter overlay / search boxes still tab between fields). Wide mode
+> deliberately falls through to Textual's default focus traversal.
+
+## Short terminals (wide layout, few rows)
+
+Width and height are handled independently. The page navigator above is
+the **width** story (`< NARROW_TERMINAL_WIDTH = 100` cells). There is a
+separate **height** rule for the wide layout: when the terminal is
+shorter than `SHORT_TERMINAL_HEIGHT = 30` rows (`short_mode`), the
+bottom Log panel (+ its drag splitter) is collapsed out so the ~10-row
+Log strip doesn't crowd the tree / tables. The command history stays
+reachable via **F2** (Command Monitor); grow the terminal back over the
+threshold and the Log panel returns at its persisted height. `short_mode`
+is a no-op in narrow mode — there the navigator already owns the Log via
+its dedicated `log` page. Both thresholds are re-evaluated on every
+`on_resize` (and once in `on_mount` for the startup size).
+
 ## Layout rules (what `_apply_pane_visibility` enforces)
 
 1. **Wide mode** (`narrow_mode == False`): both panes, detail pane, and
    the Log panel are all visible and restored to their persisted
    heights/width. Leaving narrow mode resets `narrow_page` to `tree` so
    a stale `log`/`submitted` page can't strand the Log panel at `1fr` or
-   leave a pane hidden in the wide layout.
+   leave a pane hidden in the wide layout — but it first saves the page
+   into `_narrow_resume_page`, and **re-entering** narrow restores that
+   page instead of `tree`. So a phone rotation
+   (portrait → landscape → portrait) keeps the user where they were
+   rather than dumping them back on the tree each time.
 2. **Narrow, `tree` / panel page**: `#main` visible, Log panel + its
    splitter hidden, detail pane + its splitter hidden. Exactly one of
    left/right pane is shown at `1fr`.
@@ -142,3 +282,11 @@ the app wiring, not the core.
   column headers + multiple rows (not collapsed to 0 rows), row cursor
   moves, `m` opens the row menu, `Enter` opens the read-only detail
   viewer.
+- [ ] **Responsive columns** — in narrow mode Pending/Submitted show
+  just **Change · Description** (Description fully visible, not scrolled
+  off); History (file) shows **Rev · Action · Description**. A remote
+  Pending CL shows the `↗` marker on the Description cell (not column 0).
+  Grow back to wide and the full column set returns. Resizing across the
+  threshold re-renders the columns without a refresh. *(This is the
+  layout pass that needs eyeballing on a real ~80-col terminal — the
+  e2e test asserts column counts + cell-0 integrity, not legibility.)*

@@ -7,7 +7,13 @@ unstable networks where p4v's monolithic operations stall the UI.
 
 **Primary value:** *resilience* — auto-reconnect, chunked + resumable
 long ops, non-blocking interactive commands.
-**Secondary:** feature breadth covering p4v's daily-use surface.
+**Secondary:** feature breadth covering p4v's daily-use surface, and
+**remote usability** — the same slow/unstable link is usually a *small*
+remote screen too (iPhone Blink, a thin tmux split), so a single-page
+narrow navigator and a perceived-performance ("feel") layer make that
+viewport usable and the lag legible. See
+`docs/narrow-terminal-scenario.md` and
+`docs/perceived-performance-scenario.md`.
 
 Operates against an existing `p4` install. The Perforce binding is
 **pluggable**: P4Python (`pip install p4python`) is the preferred
@@ -17,7 +23,12 @@ Linux, non-x86 sidecars, SSH-only servers without a compiler). Force
 either with `P4V_BACKEND={python,cli}`. See *Backends* below and
 `docs/p4-cli-fallback-scenario.md` for the contract. No background
 service, no plugins; runs in any reasonably modern terminal including
-iPhone Blink (narrow-mode auto-engages below 100 cells wide).
+iPhone Blink: below `NARROW_TERMINAL_WIDTH = 100` cells the layout
+collapses to the single-page navigator (one full-screen page at a
+time, cycled with `Tab`), and below `SHORT_TERMINAL_HEIGHT = 45` rows
+the bottom Log panel auto-collapses so a short viewport keeps its
+tree / tables. Both width and the layout choice are overridable
+(`[narrow] layout` / `Ctrl+Shift+N`).
 
 ---
 
@@ -63,6 +74,26 @@ iPhone Blink (narrow-mode auto-engages below 100 cells wide).
 * `CmdLog` — in-memory ring of `CmdEntry` records (id, parent_id, name,
   state, timing, optional done/total/start for ETA). Listeners notified
   on every begin/end/update.
+* `narrow_nav` (pure) — the decision core for the **single-page narrow
+  navigator** (phone / thin-tmux). No Textual, no I/O, so the sequencing
+  is unit-tested in isolation; `P4VApp` does the widget show/hide wiring.
+  Owns: the page cycle + `effective_pages` (trim disabled/empty pages),
+  number-key `jump_target_by_index`, the layout pin
+  (`resolve_narrow_mode` auto/narrow/wide), and the **width-adaptive**
+  `render_breadcrumb` / `render_footer_hints` (compact when a phone in
+  portrait can't fit the full strip) + the responsive table-column
+  profiles (`TABLE_FIELDS` / `select_cells`).
+* `perf_feel` (pure) — the decision core for the **perceived-performance
+  ("체감 성능") feel layer**: `should_show_activity` (≥150 ms threshold so
+  fast ops never flicker) + escalating `activity_label`, and
+  `next_refresh_interval` (back the pending auto-refresh off on a slow
+  link). `P4VApp` owns the timers, the ConnectionBar activity suffix,
+  and the per-`@work`-load activity registry. See
+  `docs/perceived-performance-scenario.md`.
+* **Tab interception** — Textual's `Screen` binds `tab`/`shift+tab` to
+  `app.focus_next`, which shadows any app-level `tab` binding; the narrow
+  page cycle therefore lives in `P4VApp.on_key` (guarded to narrow mode,
+  base screen, non-`Input` focus) rather than a Binding that never fires.
 
 ### Backends
 
@@ -100,13 +131,21 @@ inside `p4v_tui/p4client.py`:
   **Concurrency + read cache** (closest practical approximation of
   "connection reuse" given that the `p4` binary has no REPL mode —
   see `docs/p4-cli-fallback-scenario.md` §16):
-  - `max_concurrent_calls = P4V_CLI_CONCURRENCY` (default 4).
-    P4Service splits its old single-`Lock` into a short
-    `_connect_lock` (mutex around connect/disconnect state) plus a
-    `_call_sem = BoundedSemaphore(max_concurrent_calls)`. Python
-    backend declares 1 (its single in-process connection isn't
-    thread-safe); CLI backend allows N parallel subprocesses, so
-    UI fan-outs (tree expand → dirs+files+fstat) run concurrently.
+  - `max_concurrent_calls` = `P4V_PY_CONCURRENCY` / `P4V_CLI_CONCURRENCY`
+    (both default 4). P4Service splits its old single-`Lock` into a
+    short `_connect_lock` (mutex around connect/disconnect state) plus a
+    `_call_sem = BoundedSemaphore(max_concurrent_calls)`. Both backends
+    achieve concurrency with *independent* connections rather than a
+    shared one (a single `P4.P4()` socket / `p4` invocation isn't
+    thread-safe): the Python backend leases from a pool of N `P4.P4()`
+    connections (`_PyConn` / `_acquire` / `_release`), the CLI backend
+    forks N subprocesses. So UI fan-outs (tree expand → dirs+files+fstat)
+    run concurrently, and — critically — one slow command (large `print`,
+    deep `filelog`, laggy sync chunk) occupies a single permit +
+    connection instead of serialising every other p4 call behind it,
+    keeping the UI responsive. (P4Python releases the GIL during socket
+    I/O, so the event-loop thread was never the bottleneck — the old
+    single-permit serialisation was.)
   - Idempotent reads (`info`, `client -o <name>`) are cached in
     `_CLIBackend._read_cache` for `P4V_CLI_READ_CACHE_TTL` seconds
     (default 30). Hits skip the subprocess entirely; `save_form`
@@ -160,13 +199,13 @@ Where the TUI does something p4v can't, it's marked **➕ TUI-only**.
 | Revert Files | ✅ | `Ctrl+R` · `r` · `ㄱ` · context menu (confirm) |
 | Revert Files (chunked) | ➕ TUI-only | context menu |
 | Lock / Unlock | ✅ | `Ctrl+L` / `Ctrl+U` · context menu |
-| Reconcile Offline Work | ✅ chunked-only | context menu |
-| Clean | ✅ chunked-only | context menu (confirm) |
+| Reconcile Offline Work | ✅ interactive per-file picker (dry-run preview) + chunked | context menu — `reconcile -n` preview → check/uncheck files → chunked; all-checked == old all-or-nothing |
+| Clean | ✅ interactive per-file picker + chunked | context menu — `clean -n` preview → check/uncheck → confirm (lists delete count) |
 | Move / Rename | ✅ | context menu (Browse picker for new base) · `F2` quick in-place rename + auto-submit |
 | Diff Against Have | ✅ | context menu (`#have` vs working copy) |
 | Merge / Integrate Files | ✅ | context menu — auto-prompts Resolve picker after |
 | Copy Files | ✅ | context menu — auto-prompts Resolve picker after |
-| Branch Files (`p4 populate`) | 🟡 auto-submit | context menu (no spec edit) |
+| Branch Files (`p4 populate`) | ✅ branch-mapping picker + dry-run preview | context menu — `p4 branches` picker (or manual src/tgt) → `populate -n` preview modal → confirm → submit |
 | Resolve Files | ✅ | context menu — Auto / Yours / Theirs / Skip per file |
 | Shelve / Unshelve | ✅ | Pending CL menu (full shelf cycle) |
 | Update / Delete Shelved Files | ✅ | Pending CL menu |
@@ -174,7 +213,7 @@ Where the TUI does something p4v can't, it's marked **➕ TUI-only**.
 | Diff Folders | ✅ | `Ctrl+Shift+D` with `<a>/...` vs `<b>/...` — picker over differing pairs |
 | Annotate / Blame | ✅ | context menu (`p4 annotate -i -c`) |
 | Time-lapse View | ✅ | context menu — `,`/`.` walk revisions (older/newer); ←/→ left for body horizontal scroll |
-| Revision Graph | ✅ | context menu — text-mode integration tree |
+| Revision Graph | ✅ | context menu — text-mode integration tree (`p4 filelog -i -l`; design + walk-through in `docs/revision-graph-scenario.md`) |
 | File Properties (filetype, attributes) | ✅ | context menu — view + edit |
 | Undo Changes (`p4 undo`) | ✅ | context menu — file or `@CL` (Submitted) |
 | Open With / external editor | ✅ | context menu picker driven by `[[external_editor]]` |
@@ -188,6 +227,7 @@ Where the TUI does something p4v can't, it's marked **➕ TUI-only**.
 | Get Latest / Get Latest (chunked) | ✅ | context menu |
 | File History / Folder History | ✅ | `Ctrl+T` and on cursor highlight |
 | View File | ✅ | `Enter` on a text-file leaf — pygments-based syntax highlight when filename extension is recognised, plain text for unknown / oversized files |
+| View Image / Binary file | ✅ | `Enter` on an image leaf renders half-block ANSI art (`image_preview.py`, Pillow); non-image binary shows a bounded hex window instead of "cannot display" |
 | Find File | ✅ | `Ctrl+Shift+F` |
 | Dim non-mapped paths in Depot tree | ➕ TUI-only | client View parsed once; paths the workspace doesn't include rendered with Rich `dim` style |
 | Loading spinner on tree expand | ➕ TUI-only | brail-spinner glyph appended to the parent label while ``_fetch_node_data`` runs — shared 120 ms timer |
@@ -220,7 +260,7 @@ Where the TUI does something p4v can't, it's marked **➕ TUI-only**.
 | Shelve / Unshelve / Update / Delete Shelf | ✅ | context menu — full shelf cycle |
 | Re-resolve Previously Resolved Files | ✅ | reopens Resolve picker scoped via `-f -c <CL>`; action commands also carry `-f` so the re-run actually retriggers resolve |
 | Delete (empty) Pending CL | ✅ | context menu (`p4 change -d` with confirm) |
-| Job association (`p4 fix`) | ❌ | — (no Jobs view, so no picker) |
+| Job association (`p4 fix`) | ⏭ out of scope | 2026-07 server survey: 7 jobs total, all closed, none touched since 2025-02 (a brief task-integration experiment, since abandoned) — no live demand; `p4 fix -c <CL> <job>` on the CLI |
 | Unsaved-edits guard on Cancel | ➕ TUI-only | three-button Save / Discard / Continue modal |
 | List **other workspaces'** pending CLs of the same user | ➕ TUI-only | `p4 changes -s pending -u <me>` — Pending table groups local first, then remote workspaces; remote rows rendered dim/italic with `↗ workspace-name` yellow marker in the new Workspace column |
 | Local vs remote action gating | ➕ TUI-only | remote rows: context menu drops Submit / Revert / Shelve / Move / Re-resolve / Diff-against-have; Ctrl+S refuses with a toast; Enter opens read-only FileViewerModal (`p4 describe`) instead of the editable PendingDetailModal; row-highlight detail pane falls back to `p4 describe` since `p4 opened -c <N>` is current-client scoped |
@@ -251,7 +291,7 @@ Where the TUI does something p4v can't, it's marked **➕ TUI-only**.
 | Folder history (`p4 changes -L`) | ✅ | auto-loads on directory hover; `Ctrl+T` |
 | Per-target column schema swap | ➕ TUI-only | file mode uses `Rev / Change / Action / Date / User / Description`; folder mode drops `Rev` + `Action` (per-CL data has no per-file values) — `DataTable.clear(columns=True)` rebuilds only when schema actually changes |
 | Time-lapse View | ✅ | context menu — keyboard-driven revision walker |
-| Revision Graph | ✅ | context menu — text-mode integration tree |
+| Revision Graph | ✅ | context menu — text-mode integration tree (see `docs/revision-graph-scenario.md`) |
 
 ### Search / navigation
 
@@ -260,7 +300,7 @@ Where the TUI does something p4v can't, it's marked **➕ TUI-only**.
 | Find File | ✅ depot-wide | `Ctrl+Shift+F` (`p4 files -m 100`) |
 | Auto-navigate tree to a Find result | ✅ | picker close → tree walks to file (Workspace if mapped, else Depot) |
 | Path/text filter on tree | ✅ | `/` opens floating filter input — live hide non-matches, auto-expand parents |
-| Job search | ❌ out of scope | (no Jobs view in this build) |
+| Job search | ⏭ out of scope | no Jobs view (declined 2026-07 — see Pending table's `p4 fix` row); `p4 jobs -e <expr>` on the CLI |
 | Mirror cursor between Depot ↔ Workspace on tab switch | ➕ TUI-only | uses `p4 where` to translate, falls back to closest ancestor |
 | Cycle focus through panes | ✅ | `F6` / `Shift+F6` |
 | Narrow-terminal layout (auto < 100 cells) | ➕ TUI-only | **Single full-screen page navigator** (`narrow_nav.py`): one of `tree` / `pending` / `history` / `submitted` / `log` fills the viewport. `Tab` / `Shift+Tab` cycle the whole page set (every screen reachable from one key, Log included) — `Tab` is the reliable phone driver since iPhone Blink & most mobile terminals send Tab but **not** the `Ctrl+Arrow` escape sequences (`Ctrl+→`/`Ctrl+←` are kept only as a desktop alias). `F3` / `Ctrl+W` quick-toggle tree ⇄ last panel page; `Backspace` returns to tree. On every non-`log` page the Log panel **and** the detail pane (+ both splitters) are hidden so the tree / CL table gets the full height — the old mode docked a fixed ~10-row Log strip under the tree and squeezed it to 2-3 rows on a phone. The `log` page collapses `#main` and gives the Log panel `1fr`. Focus tracking: `on_descendant_focus` + `action_smart_tab` keep `narrow_page` in sync with whatever gains focus, so a Tab/click never lands on an off-screen widget. Full design + smoke checks in `docs/narrow-terminal-scenario.md`. |
@@ -281,7 +321,7 @@ Where the TUI does something p4v can't, it's marked **➕ TUI-only**.
 |---|---|---|
 | Open Connection | ✅ | startup picker (multi-`[[profile]]` TOML) |
 | Recent connections | 🟡 implicit | `[[profile]]` list serves the same purpose |
-| Edit / Add / Remove Connection (GUI) | ❌ | TOML hand-edit only |
+| Edit / Add / Remove Connection (GUI) | ✅ | Preferences (`Ctrl+,`) → Profiles tab — add/edit/delete `[[profile]]` entries via dialog; persisted to TOML |
 | Login / Logout / Set Password | ⏭ out of scope | use `p4 login` / `p4 logout` / `p4 passwd` outside the TUI; intentionally not shipping |
 | Tickets management | ⏭ out of scope | same — handled by `p4` CLI |
 | SSO / Helix Authentication Service | 🟡 inherited from `p4` env | no in-app prompt; user authenticates outside |
@@ -321,7 +361,7 @@ surface and is better served by the existing `p4` CLI (`p4 client`,
 | Side-by-side diff viewer | ✅ | Submitted CL menu + reused for every Arbitrary Diff result |
 | Diff Two CLs | ✅ | `Ctrl+Shift+D` with `//...@A` vs `//...@B` |
 | Resolve (auto / interactive merge tool) | ✅ Auto / Yours / Theirs / Skip **+ in-app 3-way merge** | context menu; `Ctrl+E` opens the hunk-by-hunk merge editor (`merge3` + `MergeEditorModal`) |
-| Merge tool integration (P4Merge) | 🟡 via Open With | configurable `[[external_editor]]` opens local copy |
+| Merge tool integration (P4Merge) | ✅ external 3-way launch | Resolve modal `Ctrl+T` launches `[merge_tool]` (e.g. P4Merge) with base/theirs/yours/merge temp files, blocks, reads the merged result back; complements the in-app `Ctrl+E` editor |
 
 ### Resilience features (no direct p4v counterpart)
 
@@ -341,7 +381,9 @@ surface and is better served by the existing `p4` CLI (`p4 client`,
 | Log panel — click + Enter detail viewer | ➕ | clicked / ↑↓-navigated entries highlight in reverse; Enter opens LogEntryViewerModal (FileViewerModal subclass) with ±8 surrounding entries + full traceback / error details on the focused row. The popup hugs the top of the screen (`place-top`: 55% height, center top) so the LogPanel at the bottom of the layout stays visible behind it — matches the "popup must not cover its trigger" rule the Pending / Submitted row pop-ups already obey. Inside the popup ↑/↓ (and j/k, ㅏ/ㅓ) walk to the previous/next entry — PgUp/PgDn scroll the body for long tracebacks; Esc closes |
 | Exception routing to LogPanel | ➕ | `App._handle_exception` overridden to record summary + full traceback into CmdLog (rendered as `✗`) and persist the traceback to `~/.p4v-tui/last-error.log` instead of dumping Textual's fatal-exit traceback to the terminal |
 | Macros (`[[macro]]` TOML) | ➕ | Ctrl+Shift+M picker; step kinds `p4` / `sync` / `notify`; thread worker fail-fast with toast on first error |
-| Pending Changelists auto-refresh | ➕ | 30s default tick (`auto_refresh_pending_seconds` in state.json); cursor preserved across reloads |
+| Pending Changelists auto-refresh | ➕ | 30s default (`auto_refresh_pending_seconds` in state.json); cursor preserved across reloads. **Adaptive cadence** (`perf_feel.next_refresh_interval`): a self-rescheduling `set_timer` backs the interval off on a slow link (scaled by recent pending-load latency, capped 4× base, never *faster* than configured) so the background refresh doesn't contend with foreground calls |
+| In-flight activity indicator | ➕ | spinner + label appended inline to the ConnectionBar while an interactive `@work` load runs (pending / submitted / history / file-action); latency-adaptive — hidden < 150 ms (no flicker), escalates past 1 s / 8 s. No extra layout row: activity text is a suffix of the existing Server/User line so the screen never shifts. Answers "is it working or hung?" on a laggy link, esp. in narrow mode where the Log page isn't visible |
+| Reconnect state surfaced in ConnectionBar | ➕ | service-level `_on_retry`/`_on_recover` hooks on `P4Service` (default None, parity-safe); during a mid-command reconnect the bar shows `⟳ Reconnecting… (attempt N/max)`, restored on recovery — a stall the resilient runner is working through *reads* as "working on it" |
 | Cancellation on quit (no-corrupt teardown) | ➕ | already-running chunk finishes; queued chunks cancel |
 
 ### TUI conveniences (no direct p4v counterpart)
@@ -375,6 +417,12 @@ surface and is better served by the existing `p4` CLI (`p4 client`,
 | Get Revision dialog (multi-target, by CL / Label / Date / Rev) | ➕ p4v "Get Revision…" port — Force / Safe Update / files-in-CL / remove-not-in-label options |
 | Cross-workspace Pending Changelists panel | ➕ `_pending_client_by_change` tracks owner workspace; `_render_pending` rich.text dim-italic + `↗` marker for remote rows; `_is_remote_pending` / `_remote_workspace_note` helpers; `_show_remote_pending_view` opens read-only `p4 describe` view |
 | Friendly missing-dependency message at startup | ➕ `p4v.py` lazy-imports `P4VApp` inside `main()`, catches `ModuleNotFoundError`, prints Korean install hint (`pip install p4python` / `textual`) + extra P4Python wheel/compiler note; exits 1 instead of dumping a traceback |
+| Single-page narrow navigator (phone / thin tmux) | ➕ below `NARROW_TERMINAL_WIDTH = 100` cells one full-screen "page" at a time, cycle `tree → pending → history → submitted → log`. `Tab`/`Shift+Tab` cycle (phone-reliable; intercepted in `on_key` — the app `tab` Binding is shadowed by the Screen's `focus_next`), bare `1`-`9` jump to a page, `F3`/`Ctrl+W` quick-toggle tree⇄last-panel, `Backspace` home. `narrow_nav` pure core + `tests/test_e2e_narrow.py` |
+| Narrow page breadcrumb + page-aware footer (width-adaptive) | ➕ numbered breadcrumb (`1 tree · 2 pending · …`, the digit IS the jump key) + a curated per-page key-hint footer replacing Textual's full one. Both **compact on a phone in portrait** rather than clipping at the edge — breadcrumb collapses non-current chips to bare numbers, footer drops least-important hints by priority (a real iPhone-Blink finding) |
+| Responsive table columns in narrow mode | ➕ `TABLE_FIELDS` profiles trim Pending/Submitted to `Change · Description` (History → `Rev · Action · Description`) so the Description fits 80 cells; rebuilt lazily + re-rendered from cached rows on a layout flip. Column 0 stays the plain CL/rev (cursor-restore invariant); a remote CL's `↗` marker moves to the Description cell |
+| Trim / pin the narrow layout (`[narrow]` config) | ➕ `disabled_pages` / `skip_empty` drop pages from the cycle; `layout = auto\|narrow\|wide` pins narrow vs wide regardless of width (thin-but-wide tmux pane), runtime-togglable with `Ctrl+Shift+N` |
+| Rotation-safe narrow page | ➕ the page is restored on re-entering narrow mode (phone portrait→landscape→portrait) instead of always resetting to the tree |
+| Optimistic per-row action marker | ➕ a `⟳` glyph on the affected file leaf the instant a status-changing action dispatches; reconciled (and rolled back on failure) by the post-action `reload_node`. Neutral "in flight" glyph, never a predicted end-state, so it can't show a state the server didn't confirm |
 
 ### Coverage summary
 
@@ -384,11 +432,11 @@ surface and is better served by the existing `p4` CLI (`p4 client`,
 | Pending CL workflow (edit desc / toggle files / Save / Submit) | ✅ |
 | Submitted CL inspection (unified + side-by-side diff) | ✅ |
 | File + folder history | ✅ + auto-load on cursor hover |
-| File viewing | ✅ |
+| File viewing (text + image ANSI-art + binary hex) | ✅ |
 | Locking | ✅ |
-| Reconcile / Clean | ✅ (chunked) |
-| Branch / Copy / Integrate | ✅ (auto-prompts Resolve) |
-| Resolve | ✅ Auto / Yours / Theirs / Skip |
+| Reconcile / Clean | ✅ (interactive per-file picker + chunked) |
+| Branch / Copy / Integrate | ✅ (Branch: mapping picker + preview; Copy/Integrate auto-prompt Resolve) |
+| Resolve | ✅ Auto / Yours / Theirs / Skip + in-app 3-way + external merge tool |
 | Submit & Resolve | ✅ |
 | Shelve / Unshelve / Update / Delete shelf | ✅ |
 | Annotate / Time-lapse / Revision Graph | ✅ |
@@ -399,7 +447,7 @@ surface and is better served by the existing `p4` CLI (`p4 client`,
 | Preferences GUI (in-app TOML editor) | ✅ |
 | Tree path filter (`/`) · Find File auto-navigate | ✅ |
 | Rename / Move | ✅ |
-| Multiple connection profiles (picker) | ✅ via TOML |
+| Multiple connection profiles (picker + in-app add/edit/delete) | ✅ |
 | Filesystem hand-offs (Show In, Open Cmd) | ✅ |
 | Arbitrary diff (file vs file / two folders / two CLs / vs Have) | ✅ `Ctrl+Shift+D` + workspace context menu |
 | Fast Search (`Ctrl+F`) — filename + live preview + highlight | ➕ TUI-only (local SQLite index, IME-friendly debounce) |
@@ -415,7 +463,9 @@ surface and is better served by the existing `p4` CLI (`p4 client`,
 | Jobs (list / spec / fix) | ⏭ out of scope |
 | Login / Logout / Set Password / Tickets UI | ⏭ out of scope |
 | Resilience (retry, chunking, resume) | ➕ TUI-only |
-| Narrow-terminal / IME / CJK / Quitting feedback | ➕ TUI-only |
+| Single-page narrow navigator (phone / thin tmux: breadcrumb, number-jump, page-aware footer, responsive columns, layout pin — all width-adaptive) | ➕ TUI-only |
+| Perceived-performance feel layer (in-flight indicator, latency-adaptive feedback, adaptive auto-refresh, reconnect-state bar, optimistic action marker) | ➕ TUI-only |
+| IME / CJK / Quitting feedback | ➕ TUI-only |
 
 The full p4v daily-developer surface — get / edit / submit / revert /
 reconcile / branch-copy-integrate / resolve / shelve / diff
@@ -439,9 +489,10 @@ well-understood place.
 | Key | Action |
 |---|---|
 | `F2` | Command Monitor popup (or **Quick Rename + auto-submit** when a tree is focused) |
-| `F3` | (narrow) Toggle panels overlay · (wide) Focus right pane |
+| `F3` / `Ctrl+W` | (narrow) Quick-toggle tree ⇄ last-visited panel page · (wide) Focus right pane |
 | `F5` | Refresh all panels |
 | `F6` / `Shift+F6` | Cycle focus through panes |
+| `Ctrl+Shift+N` | Cycle the layout pin: auto → narrow → wide (force the single-page navigator on a thin-but-wide pane, or the full layout on a narrow window) |
 | `Ctrl+F` | **Fast Search** — typing-as-you-go filename + live preview |
 | `Ctrl+Shift+F` | Find File (server-side fallback) — picked file auto-navigates the tree |
 | `Ctrl+D` | Submitted CL diff vs previous (unified) |
@@ -452,8 +503,17 @@ well-understood place.
 | `Ctrl+,` | Preferences (in-app TOML editor) |
 | `[` / `]` | Shrink / grow left pane |
 | (mouse drag) | Resize panes on any of the 3 splitter handles (triangles ▸ ▾) |
-| `Backspace` | (narrow + panels overlay) Return to tree |
+| `Backspace` | (narrow) Return to the tree page from any page |
 | `q` / `ㅂ` · `Ctrl+Q` | Quit |
+
+### Narrow mode (single-page navigator, < 100 cells)
+| Key | Action |
+|---|---|
+| `Tab` / `Shift+Tab` | Next / previous page (`tree → pending → history → submitted → log`, wraps). The phone-reliable driver — Blink emits `Tab` but not `Ctrl+Arrow` |
+| `1`–`9` | Jump straight to that position in the cycle (the breadcrumb numbers the chips) |
+| `Ctrl+→` / `Ctrl+←` | Next / previous page — desktop-terminal alias for `Tab` / `Shift+Tab` |
+| `F3` / `Ctrl+W` | Quick-toggle tree ⇄ last-visited panel page |
+| `Backspace` | Return to the tree page |
 
 ### Workspace / Depot tree (when focused)
 | Key | Action |
@@ -834,3 +894,158 @@ client makes the default changelist unsafe — see `docs/MEMORY.md`).
   round trip (no conflicting files available) and the permalink
   `p4 filelog` move-following (no renamed file available). Pure cores
   are unit tested; unmoved/clean paths behave correctly.
+
+CLs 57849-57869 (2026-06) — p4v feature-gap closing batch (eight
+single-purpose CLs, each with its own pure-logic module + unit tests +
+a headless e2e gesture where one applies):
+
+  * 57849 — **Image / binary preview.** `image_preview.py` (pure):
+    magic-byte detect + half-block ANSI-art render (Pillow) + hex dump.
+    `FileViewerModal` gains a `rendered=` path for pre-built renderables;
+    `_open_file_viewer` keeps raw bytes and routes images → ANSI art,
+    other binaries → hex. Pillow added to requirements (optional; hex
+    fallback on import/decode failure).
+  * 57854 — **CL table filter / sort.** `cl_table_filter.py` (pure
+    `CLTableView` + `apply_view`) + `CLFilterModal`. Pending/Submitted
+    `Shift+M` → Filter/Sort; view persisted to `state.json`; re-render
+    from cached rows (no extra `p4 changes`). Path filter intentionally
+    omitted (would need a per-CL `describe`).
+  * 57857 — **Interactive Reconcile / Clean.** `reconcile_preview.py`
+    (pure parse of `reconcile -n` / `clean -n`) + `ReconcilePickerModal`
+    + `ReconcileFilesJob` / `CleanFilesJob`. All-checked == old
+    all-or-nothing subdir job; subset == explicit-files job.
+  * 57862 — **GUI connection profiles.** Preferences → Profiles tab
+    (`ProfileEditModal`) adds/edits/deletes `[[profile]]` entries;
+    `write_config` already emitted them, so save is a model swap.
+  * 57863 — **Branch Files preview + mapping.** `branch_files.py` (pure
+    `build_populate_args` / `parse_populate_preview`) + `BranchPickerModal`
+    (`p4 branches`) + `BranchPreviewModal` (`populate -n` dry run). BCI
+    modal gains `branch_spec` (mapping mode hides Source).
+  * 57865 — **External P4Merge.** `[merge_tool]` config + blocking
+    `fs_actions.run_merge_tool`; Resolve `Ctrl+T` reconstructs
+    base/theirs/yours via `merge3`, launches the tool, reads `{merge}`
+    back. Complements the in-app `Ctrl+E` editor.
+  * 57867 — **Workspace-tree navigation fix** (was a tracked caveat):
+    `P4Tree._match_child` final-segment basename fallback lands the
+    cursor on a depot-keyed file leaf when walking a client-syntax path,
+    without unifying `node.data` (no ripple). `tests/test_tree_navigation.py`.
+  * 57869 — **e2e automation + test-state isolation fix.**
+    `tests/test_e2e_gestures_more.py` drives the Priority-B handoff
+    checklist headlessly (palette/title/marks/Go-to-path/bookmarks/image/
+    filter). Found + fixed a real hazard: `state.STATE_PATH` is bound at
+    import from `Path.home()`, so the e2e `_isolated_home` (late `$HOME`)
+    didn't redirect `save_state` — a saved-filter test was writing the
+    dev's real `~/.p4v-tui/state.json` and that persisted filter then
+    emptied every later test's pending list. `_isolated_home` now also
+    monkeypatches `state.STATE_PATH`.
+
+  Net: six p4v gaps closed (Branch Files, interactive Reconcile/Clean,
+  image/binary preview, CL filter/sort, external merge tool, GUI
+  connection editor), one caveat fixed, e2e coverage broadened. Suite
+  330 → 396 passing. `DESIGN.md` matrix + `docs/p4v-feature-gaps.md`
+  updated in lockstep.
+
+CLs 58760-58769, 58790, 58792 (2026-06) — **narrow / remote-terminal
+push** (the small-screen half of the resilience story). Plan in
+`docs/narrow-terminal-improvements.md`; behaviour in
+`docs/narrow-terminal-scenario.md`. Pure core grows in `narrow_nav.py`,
+verified by the first headless-pilot navigator tests
+(`tests/test_e2e_narrow.py`).
+
+  * **58761 — effective page cycle + the Tab-shadow fix.** `[narrow]`
+    config (`disabled_pages` / `skip_empty`) trims the cycle;
+    `cycle_page` / `toggle_target` take the effective list. *Bug found:*
+    the `Tab` page cycle never actually fired — Textual's `Screen` binds
+    `tab` → `app.focus_next`, shadowing the app binding. Now driven from
+    `P4VApp.on_key` (narrow + base screen + non-`Input` guards). Caught
+    only because this CL added the first navigator e2e tests.
+  * **58762 — page-indicator breadcrumb.** `#narrow_breadcrumb` shows the
+    effective cycle with the current page reverse-highlighted.
+  * **58763 — rotation-safe page.** Re-entering narrow restores the last
+    page instead of resetting to the tree (phone rotate round-trip).
+  * **58764 — number-key direct jump.** Bare `1`-`9` jump to a page
+    (`jump_target_by_index`); the breadcrumb numbers each chip so the
+    digit is self-documenting. (A `g`-chord was the original plan but `g`
+    is taken by workspace-tree chunked sync.)
+  * **58765 — page-aware footer.** `#narrow_footer` replaces Textual's
+    full Footer with a curated per-page key-hint strip.
+  * **58766 — layout pin.** `[narrow] layout = auto|narrow|wide` +
+    `Ctrl+Shift+N` (`resolve_narrow_mode`) — force the navigator on a
+    thin-but-wide tmux pane, applied so a stray resize can't undo it.
+  * **58769 — responsive table columns.** `TABLE_FIELDS` profiles trim
+    Pending/Submitted → `Change · Description`, History →
+    `Rev · Action · Description`; `_set_table_columns` rebuilds lazily,
+    `_rerender_tables_for_mode` re-renders cached rows on a layout flip.
+    Column-0 identity invariant preserved (remote `↗` marker moves to the
+    Description cell).
+  * **58790 / 58792 — width-adaptive breadcrumb + footer (real-device
+    fix).** iPhone-Blink testing at ~46 cols showed the breadcrumb's
+    `5 log` chip and the footer's `q quit` clipping off the edge — which
+    headless tests (asserting content, not pixel width) missed. The
+    breadcrumb now compacts non-current chips to bare jump numbers, and
+    the footer drops least-important hints as a *strict by-importance
+    prefix* (no low-priority hint survives past a dropped higher one);
+    both fall back to full form when there's room.
+
+CLs 58773-58786 (2026-06) — **perceived-performance ("체감 성능") feel
+layer** (the sibling to resilience: on the same bad link, does it *feel*
+responsive?). Scenario + status in
+`docs/perceived-performance-scenario.md`; pure policy in `perf_feel.py`
+(`tests/test_perf_feel.py`), wiring + e2e in `tests/test_e2e_perf.py`.
+
+  * **58776 — in-flight activity indicator (P0.1+P0.3).** Wires the
+    previously-orphaned `#job_status` slot to a spinner + label shown
+    while an interactive `@work` load runs; latency-adaptive (hidden
+    < 150 ms so fast ops don't flicker, escalating label past 1 s / 8 s).
+    App activity registry (`_begin/_end_activity`, UI-thread only; workers
+    marshal via `call_from_thread`), one lazy timer that stops when idle.
+  * **58779 — adaptive auto-refresh (P2.1).** Fixed `set_interval` →
+    self-rescheduling `set_timer`; `next_refresh_interval` backs the
+    pending refresh off on a slow link (never faster than configured,
+    capped 4× base) so it stops contending with foreground calls.
+  * **58781 / 58786 — optimistic action acknowledgment (P1.3).** Inline
+    file actions raise the indicator with a per-action verb (58781), and
+    the affected file leaf gets an optimistic `⟳` marker the instant the
+    action dispatches (58786), reconciled / rolled back by the existing
+    post-action `reload_node`. Neutral "in flight" glyph, never a faked
+    end-state.
+  * **58782 — reconnect state in the ConnectionBar (P1.2).** Service-level
+    `_on_retry` / `_on_recover` hooks on `P4Service` (default None,
+    parity-safe) let the bar show `⟳ Reconnecting… (attempt N/max)` during
+    a mid-command stall and restore the normal line on recovery.
+  * **58777 / 58783 — honest re-scoping.** Reading the code while
+    implementing collapsed two planned items into already-handled:
+    refresh render is *atomic* (worker fetches, then a single synchronous
+    `clear`+repopulate — old rows never blank, so P0.2 stale-while-
+    revalidate isn't needed) and Submitted is eager-loaded at connect (so
+    P1.1 prefetch is moot; History has no prefetch target). P2.2
+    cancellable-loads was declined as cosmetic (a thread worker can't
+    interrupt a blocking p4 socket call), P2.3 gated on a measurement.
+
+  Net: the narrow navigator + feel layer make the slow-link *remote*
+  experience usable and legible without touching the data path. Suite
+  → 512 passing; `DESIGN.md` Architecture / matrices / keyboard reference
+  + both scenario docs updated in lockstep.
+
+CLs 60264–60267 (2026-06-22) — **UI freeze / layout-shift bug-fix batch.**
+
+  * **60264 — activity indicator 레이아웃 이동.** `#job_status` 위젯이
+    `display:none ↔ block` 토글 시마다 전체 레이아웃 리플로우를 유발해
+    화면이 1줄씩 위아래로 흔들리고 0.1 s 간격으로 키 처리가 밀리는 문제.
+    `ConnectionBar`에 `set_activity(text)` / `show_reconnecting(text)` /
+    `_render_bar()` 추가; 활동 텍스트를 Server/User 줄 끝에 인라인으로
+    표시해 높이 불변. `_update_activity_widget` → `conn_bar.set_activity(text)`
+    로 교체; `#job_status` 위젯 + CSS 블록 제거; `test_e2e_perf.py` 대응.
+  * **60266 — 히스토리 로딩 중 내비게이션 동결 수정.** `on_tree_node_highlighted`
+    이 커서 이동마다 즉시 P4 호출을 발생시켜 `_call_sem` 대기 스레드가
+    쌓이고 스레드 풀이 포화, 조작 불가 상태가 되는 문제. 300ms 디바운스
+    (`_history_highlight_seq` 카운터) 추가 — 커서가 정착할 때까지 P4 호출
+    지연. 추가로 취소된 워커 스레드가 `_render_history`를 호출하지 않도록
+    `get_current_worker().is_cancelled` 체크 삽입.
+  * **60267 — Pending detail 파일 목록 Enter → 파일 뷰어.** `#detail_files`
+    DataTable에서 Enter 시 아무 일도 없었음. `on_data_table_row_selected`에
+    `detail_files` 케이스 추가; 첫 번째 컬럼(depot 경로)을 꺼내
+    기존 `_open_file_viewer`로 라우팅.
+
+  Net: 세 가지 UX 버그 수정 (레이아웃 이동, 동결, 누락된 Enter 동작).
+  Suite 575 passing (변경 없음).

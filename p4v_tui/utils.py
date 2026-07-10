@@ -61,3 +61,36 @@ def truncate_cells(text: str, max_cells: int, ellipsis: str = "…") -> str:
     if max_cells <= ell_width:
         return ellipsis[:max_cells]
     return set_cell_size(text, max_cells - ell_width).rstrip() + ellipsis
+
+
+def is_creation_action(action: str) -> bool:
+    """True if a p4 head ``action`` *created* the file under this path —
+    i.e. it has no meaningful prior content revision to fall back to.
+
+    Covers ``add`` / ``branch`` / ``import`` and, crucially, the compound
+    ``move/add`` (a rename's destination). A naive ``action in ("add",
+    "branch")`` test misses ``move/add``: usually harmless because such a
+    file is rev 1, but a move onto a *previously deleted* path lands a
+    ``move/add`` at rev > 1, whose ``rev-1`` is only a delete tombstone —
+    not a predecessor of the moved-in content. The ``endswith("/add")``
+    arm future-proofs any other ``x/add`` variant. Mirrors the
+    compound-action handling in :func:`search_jobs.is_deleted_at_head`.
+    """
+    a = (action or "").strip()
+    return a in ("add", "branch", "import") or a.endswith("/add")
+
+
+def is_deleted_at_head(action: str) -> bool:
+    """True if a p4 head ``action`` means the file is *gone* at head.
+
+    Mirrors what ``p4 files -e`` filters server-side. A naive
+    ``action == "delete"`` misses ``move/delete`` — the old path of a
+    rename, and by far the most common gone-at-head action on a busy
+    depot — plus ``purge`` / ``archive``. The ``endswith("/delete")``
+    arm future-proofs any other ``x/delete`` variant. Counterpart to
+    :func:`is_creation_action`; centralised here so every p4-action
+    consumer (Fast Search ingest/query, Find File, the workspace-tree
+    status marker, …) classifies the compound verbs the same way.
+    """
+    a = (action or "").strip()
+    return a == "delete" or a.endswith("/delete") or a in ("purge", "archive")

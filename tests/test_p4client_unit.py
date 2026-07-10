@@ -402,7 +402,7 @@ class TestImportSurface:
         stdlib_allowed = {
             "io", "marshal", "os", "re", "shutil", "subprocess",
             "sys", "threading", "time",
-            "dataclasses", "typing", "__future__",
+            "contextlib", "dataclasses", "typing", "__future__",
         }
         unexpected = top_level_modules - stdlib_allowed
         assert not unexpected, (
@@ -537,9 +537,13 @@ class TestCLICache:
 class TestBackendConcurrency:
     """`max_concurrent_calls` declares the semaphore sizing."""
 
-    def test_python_backend_serialises(self):
-        # P4Python's in-process connection isn't thread-safe.
-        assert pc._PythonBackend.max_concurrent_calls == 1
+    def test_python_backend_pooled_concurrency(self):
+        # A single P4Python connection isn't thread-safe, so the backend
+        # keeps a *pool* of independent connections (one per concurrent
+        # call) rather than serialising everything through one. Default
+        # P4V_PY_CONCURRENCY is 4; tests don't lock it to a specific
+        # value because the env var may have been set externally.
+        assert pc._PythonBackend.max_concurrent_calls >= 1
 
     def test_cli_backend_parallel(self):
         # CLI subprocesses are independent. _CLI_CONCURRENCY default
@@ -565,6 +569,77 @@ class TestBackendConcurrency:
             for _ in range(acquired):
                 svc._call_sem.release()
         assert acquired == b.max_concurrent_calls
+
+
+class TestPythonBackendPool:
+    """Connection-pool mechanics for the Python backend.
+
+    These exercise `_acquire` / `_release` / `configure` without a live
+    server — leasing a connection doesn't open a socket (that happens
+    lazily on first use), so the pool's bookkeeping is testable offline.
+    They do need P4Python importable, since `_PythonBackend.__init__`
+    builds a template `P4.P4()` to read env-resolved defaults.
+    """
+
+    @pytest.fixture
+    def backend(self, has_p4python):
+        if not has_p4python:
+            pytest.skip("P4Python not installed")
+        b = pc._PythonBackend()
+        b.connect()
+        yield b
+        b.disconnect()
+
+    def test_concurrent_leases_are_distinct_connections(self, backend):
+        # The whole point of the pool: N concurrent calls each get their
+        # own P4 object so one slow command can't block the others.
+        leased = [backend._acquire() for _ in range(4)]
+        try:
+            assert len({id(c.p4) for c in leased}) == 4
+        finally:
+            for c in leased:
+                backend._release(c, broken=False)
+
+    def test_idle_pool_capped_and_reused(self, backend):
+        leased = [backend._acquire() for _ in range(backend.max_concurrent_calls)]
+        ids = {id(c.p4) for c in leased}
+        for c in leased:
+            backend._release(c, broken=False)
+        # Idle pool never grows past the concurrency cap.
+        assert len(backend._idle) == backend.max_concurrent_calls
+        # A subsequent lease reuses a pooled connection rather than
+        # building a fresh one.
+        reused = backend._acquire()
+        try:
+            assert id(reused.p4) in ids
+        finally:
+            backend._release(reused, broken=False)
+
+    def test_broken_connection_is_not_repooled(self, backend):
+        conn = backend._acquire()
+        before = len(backend._idle)
+        backend._release(conn, broken=True)
+        assert len(backend._idle) == before
+
+    def test_configure_change_flushes_idle_and_bumps_gen(self, backend):
+        c = backend._acquire()
+        backend._release(c, broken=False)
+        assert backend._idle  # something is pooled
+        gen_before = backend._gen
+        backend.configure(port="ssl:does-not-exist:1666")
+        assert backend._gen == gen_before + 1
+        assert backend._idle == []          # stale connections dropped
+        assert backend.port == "ssl:does-not-exist:1666"
+
+    def test_configure_noop_does_not_bump_gen(self, backend):
+        # Re-applying the same params (the reconnect path passes the
+        # current values back) must not churn the pool.
+        gen_before = backend._gen
+        backend.configure(
+            port=backend.port, user=backend.user,
+            client=backend.client, charset=backend.charset,
+        )
+        assert backend._gen == gen_before
 
 
 # --- FileViewerModal line-number prefix (CL 16) ----------------------------
@@ -789,3 +864,90 @@ class TestOptionLikePathGuard:
         svc.files("//depot/*")
         assert ("run_tagged", ("dirs", "//depot/*")) in b.events
         assert ("run_tagged", ("files", "-e", "//depot/*")) in b.events
+
+
+class _FlakyBackend(pc._Backend):
+    """Backend that raises a connection error on the first N run calls
+    then succeeds — exercises the resilient runner's retry/recover path."""
+
+    name = "flaky"
+
+    def __init__(self, fail_times: int) -> None:
+        self._connected = True
+        self._fail = fail_times
+        self.calls = 0
+
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
+    @property
+    def port(self) -> str:
+        return "ssl:host:1666"
+
+    @property
+    def user(self) -> str:
+        return "u"
+
+    @property
+    def client(self) -> str:
+        return "c"
+
+    @property
+    def charset(self) -> str:
+        return ""
+
+    def configure(self, **kwargs):
+        pass
+
+    def connect(self) -> None:
+        self._connected = True
+
+    def disconnect(self) -> None:
+        self._connected = False
+
+    def run_tagged(self, args):
+        self.calls += 1
+        if self.calls <= self._fail:
+            self._connected = False
+            raise pc.P4Exception("TCP receive failed")  # connection fragment
+        return [{"ok": "1"}]
+
+    def run_text(self, args):
+        return self.run_tagged(args)
+
+
+class TestReconnectCallbacks:
+    def test_retry_then_recover_fires_service_callbacks(self):
+        b = _FlakyBackend(fail_times=2)
+        svc = pc.P4Service(backend=b)
+        retries: list[tuple[int, int]] = []
+        recovered: list[bool] = []
+        svc._on_retry = lambda a, m, e: retries.append((a, m))
+        svc._on_recover = lambda: recovered.append(True)
+        result = svc._run_resilient(("info",), base_delay=0.0, max_attempts=5)
+        assert result == [{"ok": "1"}]
+        assert len(retries) == 2       # two failed attempts -> two retries
+        assert recovered == [True]     # recovered exactly once
+
+    def test_no_recover_when_no_retry_needed(self):
+        b = _FlakyBackend(fail_times=0)
+        svc = pc.P4Service(backend=b)
+        recovered: list[bool] = []
+        svc._on_recover = lambda: recovered.append(True)
+        svc._run_resilient(("info",), base_delay=0.0)
+        assert recovered == []         # clean call -> no recover hook
+
+    def test_per_call_on_retry_overrides_service_default(self):
+        b = _FlakyBackend(fail_times=1)
+        svc = pc.P4Service(backend=b)
+        default: list[int] = []
+        percall: list[int] = []
+        svc._on_retry = lambda a, m, e: default.append(1)
+        svc._run_resilient(
+            ("info",),
+            on_retry=lambda a, m, e: percall.append(1),
+            base_delay=0.0,
+        )
+        assert percall == [1]
+        assert default == []           # service default unused when per-call set
