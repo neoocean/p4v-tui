@@ -16,7 +16,7 @@ p4v-tui 는 모든 장기 작업을 작은 청크로 분해해 진행 상태를 
 
 - Python 단일 진입점, 외부 데몬·플러그인 없음
 - iPhone Blink(폭 80셀) 같은 좁은 터미널에서도 사용 가능(자동 narrow 모드)
-  - 세로 길이가 짧아지면(30행 미만) 하단 Log 패널을 자동으로 접어 트리·목록 공간 확보(명령 이력은 F2)
+  - 세로 길이가 짧아지면(45행 미만) 하단 Log 패널을 자동으로 접어 트리·목록 공간 확보(명령 이력은 F2)
 - Hangul IME 가 켜진 상태에서도 단일 글자 단축키 동작(2-beolsik jamo alias)
 
 > 📖 **전체 사용법 · 화면별 스크린샷 · 단축키 레퍼런스는
@@ -143,7 +143,8 @@ p4v-tui/
 ├── README.ko.md                # 이 파일 — 개요 + 둘러보기 (한국어)
 ├── docs/MANUAL.md              # 상세 사용 설명서 (스크린샷 포함)
 ├── docs/image/                 # 매뉴얼/README 스크린샷 (SVG, 자동 생성)
-├── DESIGN.md                   # 상세 설계서 + p4v 기능 커버리지
+├── DESIGN.md                   # 상세 설계서 + p4v 기능 커버리지 + CL 타임라인
+├── docs/changelog-archive.md   # CL 배치별 상세 서사 아카이브
 ├── CLAUDE.md                   # 에이전트/LLM 진입점
 ├── LICENSE                     # MIT
 ├── requirements.txt            # textual (+ 선택 p4python)

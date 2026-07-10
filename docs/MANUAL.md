@@ -237,8 +237,7 @@ With…). 자세한 키는 `p4v-tui.toml.example` 참조.
 기본(wide) 레이아웃은 다음과 같습니다:
 
 ```
-┌── ConnectionBar (server / user / workspace / root) ───────┐
-├── JobStatusBar  (청크 작업 진행률 + ETA, 없으면 빈 줄) ──────┤
+┌── ConnectionBar (server / user / workspace / root  ·  ⠋ 활동/재연결) ┐
 ├──────────────────┬────────────────────────────────────────┤
 │ Workspace / Depot│ Pending / History / Submitted          │
 │  트리 (lazy load) │  Changelists (DataTable)              │
@@ -251,6 +250,10 @@ With…). 자세한 키는 `p4v-tui.toml.example` 참조.
 ```
 
 - **ConnectionBar** — 접속한 서버 / 사용자 / 워크스페이스 / client root.
+  같은 줄 끝에 **in-flight 활동 표시**가 붙습니다: 인터랙티브 로드가
+  150 ms 를 넘으면 스피너 + 라벨(1 s / 8 s 경과 시 문구 에스컬레이션),
+  명령 중 재연결이 걸리면 `⟳ Reconnecting… (attempt N/max)`. 별도 줄이
+  아니라 suffix 라 레이아웃 높이가 변하지 않습니다(화면 흔들림 없음).
 - **좌측** — Workspace · Depot 두 트리 탭(둘 다 lazy load). Workspace 트리는
   파일 앞에 1글자 상태 마커를 표기(§6).
 - **우측** — Pending / History / Submitted 세 changelist 탭(§7–8).
@@ -361,6 +364,11 @@ Refresh All).
 
 - **자동 새로고침** — 기본 30s 주기로, 다른 클라이언트가 새 CL 을 만들어도
   30s 안에 보입니다. `state.json` 의 `auto_refresh_pending_seconds` 로 조절.
+  링크가 느려지면 최근 로드 지연에 비례해 주기를 자동으로 늘립니다(설정값의
+  최대 4배, 절대 더 빨라지지는 않음) — 백그라운드 새로고침이 포그라운드
+  명령과 경합하지 않도록.
+- **Detail 파일 목록에서 Enter** — detail pane 의 파일 행에 커서를 두고
+  `Enter` 를 누르면 해당 depot 파일이 파일 뷰어(§9)로 바로 열립니다.
 - **Unsaved-edits guard** — Pending detail 모달에서 description/파일 선택을
   건드린 뒤 Cancel 하면 Save / Discard / Continue 3-버튼으로 재확인.
 - **Default CL 격리** — 파일을 "여는" verb(`p4 edit`/`add`/`delete`) 는 항상
@@ -492,8 +500,19 @@ status bar 를 대체합니다.
 - **종료 시 무손상 정리** — `q` 종료 시 현재 청크만 마저 끝내고 큐 잡은
   깔끔히 취소. 다음 실행 때 미완료 작업 picker.
 
-청크 작업의 진행은 상단 JobStatusBar(진행률 + ETA)와 Command Monitor(§11)
-에서 실시간으로 볼 수 있습니다.
+느린 링크에서 "죽었나 일하나"를 읽을 수 있게 하는 **체감 성능 레이어**가
+위에 얹혀 있습니다:
+
+- **인라인 활동 표시** — 인터랙티브 로드가 150 ms 를 넘으면
+  ConnectionBar 줄 끝에 스피너 + 라벨(§5). 빠른 작업은 아예 표시하지 않아
+  깜빡임이 없습니다.
+- **재연결 상태 표시** — 명령 중 재접속 루프에 들어가면 같은 자리에
+  `⟳ Reconnecting… (attempt N/max)` — 멈춘 게 아니라 일하는 중임이 보입니다.
+- **낙관적 `⟳` 마커** — 파일 액션을 실행한 순간 해당 트리 leaf 에 중립
+  "in flight" 글리프가 붙고, 액션 완료 후 서버 상태로 확정/롤백됩니다.
+
+청크 작업의 진행률 + ETA 는 Command Monitor(§11.1)에서, 호출 이력은 Log
+패널(§11.2)에서 실시간으로 볼 수 있습니다.
 
 ---
 
@@ -510,6 +529,8 @@ Submitted → Log` 순서로 순환.
 - **`Tab` / `Shift+Tab`** — 전체 페이지 순환(Log 포함 모든 화면을 한 키로).
   iPhone Blink 등 모바일 터미널은 `Ctrl+화살표` escape 시퀀스를 보내지
   않으므로, 액세서리 바의 `Tab` 이 기본 이동 수단입니다.
+- **`1`–`9`** — 페이지 직행 점프. 화면 상단 **브레드크럼**(`1 tree ·
+  2 pending · …`)의 숫자가 곧 점프 키라 외울 필요가 없습니다.
 - **`F3` / `Ctrl+W`** — 트리 ↔ 마지막으로 본 패널 페이지 빠른 토글.
 - **`Backspace`** — 어느 페이지에서든 트리로 복귀.
 - **`Ctrl+→` / `Ctrl+←`** — Ctrl+화살표를 보내는 데스크톱 터미널용 별칭.
@@ -517,6 +538,22 @@ Submitted → Log` 순서로 순환.
 트리·CL 표 페이지에선 하단 Log 와 detail pane 을 숨겨 화면 높이를 통째로
 씁니다. Tab 으로 포커스가 다른 페이지의 위젯에 들어가면 자동으로 그
 페이지로 전환되어, 보이지 않는 곳으로 focus 가 사라지지 않습니다.
+
+작은 화면을 위한 추가 장치들:
+
+- **폭 적응 브레드크럼·footer** — 세로로 든 폰처럼 브레드크럼/키 힌트가
+  다 안 들어가는 폭에서는 비활성 칩을 숫자만으로, footer 힌트를 중요도
+  순으로 줄여서 끝이 잘리지 않게 합니다. footer 는 Textual 기본 대신
+  **페이지별 큐레이션된 힌트**를 보여줍니다.
+- **반응형 테이블 컬럼** — narrow 에선 Pending/Submitted 가
+  `Change · Description`, History 가 `Rev · Action · Description` 으로
+  줄어 80셀에서도 설명이 읽힙니다.
+- **레이아웃 핀** — `[narrow] layout = auto|narrow|wide` 또는
+  **`Ctrl+Shift+N`** 런타임 토글로 폭과 무관하게 강제(얇고 긴 tmux 분할엔
+  narrow 를, 좁은 창에 wide 를). `[narrow] disabled_pages` /
+  `skip_empty = true` 로 순환에서 페이지를 뺄 수 있습니다.
+- **회전 복원** — 폰을 가로↔세로로 돌려 narrow 를 나갔다 재진입해도
+  보던 페이지가 유지됩니다.
 
 ### 13.2 한글(Hangul) 환경
 
@@ -547,6 +584,8 @@ Submitted → Log` 순서로 순환.
 | `Tab` / `Shift+Tab` | (narrow) 전체 페이지 순환 / (wide) 포커스 순환 |
 | `F3` / `Ctrl+W` | (narrow) 트리 ↔ 마지막 패널 토글 / (wide) 우측 패널 포커스 |
 | `Ctrl+→` / `Ctrl+←` | (narrow) 페이지 순환 별칭 / (wide) 우측 탭 순환 |
+| `1`–`9` | (narrow) 브레드크럼 번호로 페이지 직행 점프 |
+| `Ctrl+Shift+N` | 레이아웃 핀 순환: auto → narrow → wide |
 | `F5` | 모두 새로고침(트리 펼침 상태·커서 유지) |
 | `F6` / `Shift+F6` | 패널 순환 |
 | `Ctrl+F` | Fast Search |

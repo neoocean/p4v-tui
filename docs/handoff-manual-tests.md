@@ -1,17 +1,23 @@
 # Handoff — manual test checklist (2026-05-24 feature wave)
 
 The features below were built with their **decision logic unit-tested**
-(235 passing tests), but the agent could not drive the live TUI or
-exercise some Perforce flows in its environment. This is the list of
-checks **you** should run on a real terminal + server to confirm UI
-rendering, keybindings, and the live `p4` round trips.
+(235 passing tests at the time; the suite has since grown to 586), but
+the agent could not drive the live TUI or exercise some Perforce flows
+in its environment. This is the list of checks **you** should run on a
+real terminal + server to confirm UI rendering, keybindings, and the
+live `p4` round trips.
+
+> **Status 2026-07-10:** every automatable item below is now a
+> regression test (see the per-item pointers). What still needs a human
+> is only the *visual* pair at the bottom of Priority B — merge-editor
+> legibility and the real-phone narrow layout.
 
 ## Setup
 
 ```bash
 source .venv/bin/activate
 pip install -r requirements-dev.txt   # if not already
-python -m pytest tests/ -q            # expect: all green, 2 skipped (write-gated)
+python -m pytest tests/ -q            # expect: all green, 6 skipped (write-gated)
 python p4v.py                         # drive the app for the checks below
 ```
 
