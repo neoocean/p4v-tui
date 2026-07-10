@@ -8,7 +8,9 @@ surface. Single entry point, no daemon/plugins.
 Read this first, then reach for the deeper docs as needed:
 - `README.md` — user-facing overview + deploy guide (English);
   `README.ko.md` is the Korean original (keep the two in sync).
-- `DESIGN.md` — architecture, full p4v feature-coverage matrix, CL history.
+- `DESIGN.md` — architecture, full p4v feature-coverage matrix, and a
+  one-line-per-batch CL timeline (long-form narratives:
+  `docs/changelog-archive.md`).
 - `docs/MEMORY.md` — **non-obvious gotchas; read before touching the CLI
   backend, Textual modals, or TOML/spec-form parsing.**
 

@@ -131,10 +131,10 @@
       고정. 정상 EOF/디코드 경로 + max_matches 캡도 함께.
 - [x] **CLAUDE.md 최신화** — CL 64009 (수동 잔여 목록 교체) + CL 64026
       (README 영문/한글 분리 반영).
-- [ ] **DESIGN.md CL 이력 절 다이어트** — 1,000줄 중 절반이 CL 내러티브.
-      오리엔테이션 가치가 큰 최근분만 남기고 과거분은
-      `docs/changelog-archive.md`류로 이관 검토 (p4 CL 설명이 원본
-      기록이므로 중복 보관일 뿐). 유일하게 남은 P3.
+- [x] **DESIGN.md CL 이력 절 다이어트** — CL 64060: ~500줄 서사를
+      `docs/changelog-archive.md`로 verbatim 이관, DESIGN.md에는
+      R-series 표 + 배치별 1행 타임라인 인덱스만 (1,052→591줄).
+      P3 전량 소진.
 - [x] **테스트 러너 상시 확인** — 2026-07-10 기준: 586 passed / 6
       skipped(gated), `PYTEST_ALLOW_WRITES=1` 라이브 write 4 passed,
       ruff -F clean (p4v_tui + tests).
