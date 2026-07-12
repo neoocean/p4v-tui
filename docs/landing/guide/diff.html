@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'self'">
+<title>디프 · 히스토리 — p4v-tui 가이드 5</title>
+<meta name="description" content="통합/나란히 디프, 임의 두 경로·리비전·CL 비교, 파일/폴더 히스토리, Annotate 블레임, 리비전 그래프, 타임랩스.">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body data-topic="diff">
+<div class="wrap">
+  <div class="guide-layout">
+    <aside class="toc"></aside>
+    <main class="doc">
+
+      <header style="margin-bottom:8px;">
+        <span class="kicker">상세 가이드 · 5 / 10</span>
+        <h1 style="font-size:36px;letter-spacing:-1px;margin:6px 0 10px;">디프 · 히스토리</h1>
+        <p style="font-size:18px;">변경을 비교하고 히스토리를 파고듭니다. 통합·나란히 디프, 임의 디프, 블레임, 리비전 그래프, 타임랩스.</p>
+      </header>
+
+      <section>
+        <h2 style="border-top:none;">디프</h2>
+        <ul>
+          <li><strong>제출된 CL 통합 디프</strong> — Submitted 에서 <kbd>Ctrl+D</kbd>.</li>
+          <li><strong>나란히 보기(side-by-side)</strong> — 메뉴에서. 모든 임의 디프 결과에 재사용됩니다.</li>
+          <li><strong>Diff Against Have</strong> — 워크스페이스 맥락 메뉴(<span class="inline-code">#have</span> vs 작업본).</li>
+          <li><strong>임의 디프</strong> — <kbd>Ctrl+Shift+D</kbd>: 두 파일 · 두 리비전(<span class="inline-code">#A</span> vs <span class="inline-code">#B</span>) ·
+              두 폴더(<span class="inline-code">/...</span> 쌍 피커) · 두 CL(<span class="inline-code">@A</span> vs <span class="inline-code">@B</span>).</li>
+        </ul>
+        <figure>
+          <img src="../image/17-sxs-diff.svg" alt="나란히 보기 디프 뷰어.">
+          <figcaption>나란히 보기 디프 — 임의 디프 결과에도 그대로 재사용.</figcaption>
+        </figure>
+      </section>
+
+      <section>
+        <h2>히스토리</h2>
+        <p>History 패널은 파일 리프에 커서를 올리면 파일 히스토리(<span class="inline-code">filelog</span>),
+           디렉토리면 폴더 히스토리(<span class="inline-code">changes -L</span>)를 자동 로드합니다.
+           <kbd>Ctrl+T</kbd> 로도 엽니다. 폴더일 땐 스키마가 바뀝니다(Rev·Action 열을 뺌) ➕.</p>
+        <figure>
+          <img src="../image/04-history.svg" alt="파일/폴더 히스토리.">
+          <figcaption>히스토리 패널 — Rev · Change · Action · Date · User · Description.</figcaption>
+        </figure>
+      </section>
+
+      <section>
+        <h2>Annotate · 리비전 그래프 · 타임랩스</h2>
+        <p>파일 맥락 메뉴에서 세 가지 히스토리 뷰를 엽니다.</p>
+        <ul>
+          <li><strong>Annotate / 블레임</strong> — 각 라인을 마지막으로 바꾼 CL·사용자·날짜(<span class="inline-code">annotate -i -c</span>).</li>
+          <li><strong>Revision Graph</strong> — 통합(<span class="inline-code">filelog -i -l</span>)을 따라간 텍스트 모드 히스토리.</li>
+          <li><strong>Time-lapse View</strong> — <kbd>,</kbd>/<kbd>.</kbd> 로 이전/다음 리비전을 걸어보고,
+              <kbd>←</kbd>/<kbd>→</kbd> 로 본문 가로 스크롤.</li>
+        </ul>
+        <figure>
+          <img src="../image/22-annotate.svg" alt="Annotate / 블레임 — 라인별 체인지리스트.">
+          <figcaption>Annotate — 라인별 CL · 사용자 · 날짜.</figcaption>
+        </figure>
+        <figure>
+          <img src="../image/23-revision-graph.svg" alt="Revision Graph — 텍스트 모드 통합 히스토리.">
+          <figcaption>Revision Graph — rev · CL · 사용자 · 액션 · 설명.</figcaption>
+        </figure>
+        <div class="callout">
+          터미널이라 진짜 픽셀 이미지·확대형 그래프는 없지만, 텍스트 모드 등가물로 같은 정보를 담습니다.
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+<script src="../guide-nav.js" defer></script>
+<script src="../lightbox.js" defer></script>
+</body>
+</html>

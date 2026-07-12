@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'self'">
+<title>연결 회복력 — p4v-tui 가이드 8</title>
+<meta name="description" content="자동 재연결(1s→30s 백오프), 청크·재개 가능한 동기화, 재개/버리기 피커, lost-ack 서브밋, 커맨드 모니터, 로그 패널.">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body data-topic="resilience">
+<div class="wrap">
+  <div class="guide-layout">
+    <aside class="toc"></aside>
+    <main class="doc">
+
+      <header style="margin-bottom:8px;">
+        <span class="kicker">상세 가이드 · 8 / 10</span>
+        <h1 style="font-size:36px;letter-spacing:-1px;margin:6px 0 10px;">연결 회복력</h1>
+        <p style="font-size:18px;">p4v-tui 의 존재 이유. 링크가 흔들려도 작업이 살아남는 방법을 자세히 봅니다.</p>
+      </header>
+
+      <section>
+        <h2 style="border-top:none;">자동 재연결</h2>
+        <p>모든 p4 호출은 <span class="inline-code">_run_resilient</span> 를 지납니다 — 드롭 시 지수 백오프
+           (<span class="inline-code">1s→30s</span>)로 재연결하고, <strong>재시도 대기 중 락을 놓아</strong>
+           다른 명령이 사이에 끼어들 수 있습니다(논블로킹). 중간 재연결 동안 ConnectionBar 에
+           <span class="inline-code">⟳ Reconnecting… (attempt N/max)</span> 가 뜹니다.</p>
+        <figure>
+          <img src="../image/20-reconnect.svg" alt="자동 재연결 배너.">
+          <figcaption>ConnectionBar 의 재연결 배너 — 재시도 횟수와 백오프를 표시.</figcaption>
+        </figure>
+      </section>
+
+      <section>
+        <h2>청크 · 재개 가능한 동기화</h2>
+        <ul>
+          <li><strong>청크 동기화</strong> — 파일 단위 완료를 <span class="inline-code">~/.p4v-tui/sync-state/{hash}.json</span> 에 기록.</li>
+          <li><strong>다음 실행 재개 피커</strong> — 중단된 작업을 개별로 재개/버리기/건너뛰기.</li>
+          <li><strong>청크 revert / reconcile / clean / force-sync</strong> — 한 청크씩, 대화형 우선순위가 사이에 끼어듦.</li>
+          <li><strong>Lost-ack 서브밋 멱등성</strong> — "no such pending CL" 시 <span class="inline-code">changes</span> 로 실제 커밋 여부 확인.</li>
+          <li><strong>종료 시 무손상 정리</strong> — 실행 중 청크는 마치고, 대기 청크만 취소.</li>
+          <li><strong>청크 전략 설정</strong> — <span class="inline-code">[chunking]</span>(개수/크기/단일/서브디렉토리) + 잡별 오버라이드.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>운영 가시성</h2>
+        <p><strong>커맨드 모니터</strong>(<kbd>F2</kbd>) — 부모/자식 명령 트리와 명령별 ETA. 청크 잡이
+           어떻게 분해되는지 보여줍니다. (트리에 포커스가 있을 땐 <kbd>F2</kbd> 가 퀵 리네임이므로,
+           표·로그나 푸터의 <span class="inline-code">f2</span> 로 엽니다.)</p>
+        <p><strong>로그 패널</strong> — 모든 p4 호출·청크 잡·오류를 타임스탬프와 함께 쌓는 스크롤 가능한
+           꼬리. 바닥에서 자동 팔로우. 항목을 <kbd>Enter</kbd> 하면 ±8 줄 맥락 + 전체 트레이스백 뷰어.
+           예외는 크래시 대신 로그로 라우팅되고 <span class="inline-code">~/.p4v-tui/last-error.log</span> 에 남습니다.</p>
+        <figure>
+          <img src="../image/08-command-monitor.svg" alt="커맨드 모니터.">
+          <figcaption>커맨드 모니터 — 부모/자식 명령 트리로 청크 분해가 보인다.</figcaption>
+        </figure>
+        <div class="callout">
+          <strong>매크로</strong>(<kbd>Ctrl+Shift+M</kbd>) — <span class="inline-code">[[macro]]</span> 로 정의한
+          <span class="inline-code">p4</span>/<span class="inline-code">sync</span>/<span class="inline-code">notify</span>
+          스텝 체인을 fail-fast 로 실행. (로컬 명령을 실행하므로 신뢰할 수 있는 설정만.)
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+<script src="../guide-nav.js" defer></script>
+<script src="../lightbox.js" defer></script>
+</body>
+</html>

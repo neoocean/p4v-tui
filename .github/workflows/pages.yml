@@ -1,0 +1,41 @@
+name: Deploy landing to GitHub Pages
+
+# Publishes ONLY docs/landing/ (a self-contained static site) as the GitHub
+# Pages site root. The custom domain is taken from docs/landing/CNAME.
+# Runs on any change to the site or this workflow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/landing/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time (cancel an in-progress run).
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Actions are pinned to commit SHAs (not mutable @vN tags): this job
+      # holds id-token:write + pages:write, so a re-pointed tag could inject
+      # a malicious commit. The trailing comment is the human-readable
+      # version — bump the SHA and the comment together on upgrade.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b  # v5
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa  # v3
+        with:
+          path: docs/landing       # this directory only, served at site root
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e  # v4

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'self'">
+<title>설치 · 연결 — p4v-tui 가이드 2</title>
+<meta name="description" content="p4v-tui 설치: Python 3.12+, P4Python 또는 p4 CLI 백엔드, p4v-tui.toml 연결 설정과 프로파일, 인증 경계.">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body data-topic="install">
+<div class="wrap">
+  <div class="guide-layout">
+    <aside class="toc"></aside>
+    <main class="doc">
+
+      <header style="margin-bottom:8px;">
+        <span class="kicker">상세 가이드 · 2 / 10</span>
+        <h1 style="font-size:36px;letter-spacing:-1px;margin:6px 0 10px;">설치 · 연결</h1>
+        <p style="font-size:18px;">Python 3.12+ 와 Perforce 백엔드 하나면 됩니다. 설치·실행·백엔드 선택·연결 설정을 차례로 봅니다.</p>
+      </header>
+
+      <section>
+        <h2 style="border-top:none;">준비물</h2>
+        <ul>
+          <li><strong>Python 3.12+</strong> (<span class="inline-code">tomllib</span> 사용).</li>
+          <li><strong>Perforce 백엔드 하나</strong> — P4Python(<span class="inline-code">pip install p4python</span>)
+              또는 PATH 의 <span class="inline-code">p4</span> CLI. 자동 선택됩니다.</li>
+          <li>실제 TTY + UTF-8 로케일(<span class="inline-code">LANG/LC_ALL=*.UTF-8</span>).</li>
+          <li>쓰기 가능한 HOME — 런타임 상태는 <span class="inline-code">~/.p4v-tui/</span> 아래.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>설치 · 실행</h2>
+<pre class="code"><span class="p">$</span> git clone https://github.com/neoocean/p4v-tui && cd p4v-tui
+<span class="p">$</span> python3 -m venv .venv && source .venv/bin/activate
+<span class="p">$</span> pip install -r requirements.txt
+<span class="p">$</span> python p4v.py</pre>
+        <p>번들된 <span class="inline-code">p4v</span> 래퍼를 PATH 에 심으면 어디서든 실행되고,
+           <span class="inline-code">.venv</span> 가 없으면 알아서 부트스트랩합니다.</p>
+<pre class="code"><span class="p">$</span> ln -sf "$PWD/p4v" ~/.local/bin/p4v
+<span class="p">$</span> p4v                          <span class="c"># 어느 디렉토리에서든</span></pre>
+        <div class="callout warn">
+          Homebrew/시스템 파이썬이 <span class="inline-code">pip install</span> 을 거부하면(PEP 668),
+          앱이 세 가지 경로(프로젝트 venv[권장] · <span class="inline-code">--user</span> ·
+          <span class="inline-code">--break-system-packages</span>)를 안내합니다.
+        </div>
+      </section>
+
+      <section>
+        <h2>백엔드 — P4Python vs CLI</h2>
+        <table>
+          <thead><tr><th>백엔드</th><th>설치</th><th>호출 비용</th><th>언제</th></tr></thead>
+          <tbody>
+            <tr><td><strong>P4Python</strong> (선호)</td><td><span class="inline-code">pip install p4python</span></td><td>~2–10ms, 인프로세스</td><td>휠이 깔끔히 설치될 때</td></tr>
+            <tr><td><strong>p4 CLI</strong> (폴백)</td><td>perforce.com/downloads</td><td>~50–100ms, fork+exec</td><td>휠 불가 · 컴파일러 없음 · SSH 전용</td></tr>
+          </tbody>
+        </table>
+        <p>선택 우선순위: <span class="inline-code">P4V_BACKEND</span> 환경변수 →
+           <span class="inline-code">import P4</span> 성공 → <span class="inline-code">p4</span> 존재 →
+           없으면 친절한 안내 후 종료. 시작 시 로그·타이틀에 활성 백엔드가 표시됩니다
+           ("Backend: P4Python (api 99)" 등).</p>
+      </section>
+
+      <section>
+        <h2>연결 설정 · 프로파일</h2>
+        <p>연결은 P4 환경변수 / <span class="inline-code">P4CONFIG</span> /
+           <span class="inline-code">p4v-tui.toml</span> 중 잡히는 것을 씁니다. 설정 파일 탐색 순서:
+           <span class="inline-code">./p4v-tui.toml</span> →
+           <span class="inline-code">./.p4v-tui.toml</span> →
+           <span class="inline-code">~/.p4v-tui.toml</span> →
+           <span class="inline-code">~/.config/p4v-tui/config.toml</span>.</p>
+<pre class="code"><span class="c"># p4v-tui.toml — 단일 서버</span>
+[connection]
+port   = "ssl:perforce.example.com:1666"
+user   = "alice"
+client = "alice-mbp"
+
+<span class="c"># 여러 서버 — 각 프로파일이 시작 피커의 한 줄</span>
+[[profile]]
+name   = "prod"
+port   = "ssl:perforce.example.com:1666"
+user   = "alice"
+client = "alice-mbp"</pre>
+        <p><span class="inline-code">Ctrl+,</span> 설정 GUI 의 <em>Profiles</em> 탭에서 프로파일을
+           추가/편집/삭제하면 TOML 에 영속됩니다.</p>
+        <div class="callout">
+          <strong>인증은 앱 밖.</strong> 로그인/로그아웃/비밀번호/티켓/SSO 는
+          <span class="inline-code">p4 login</span> 등 CLI 로 — 보안 경계를 한 곳에 둡니다.
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+<script src="../guide-nav.js" defer></script>
+<script src="../lightbox.js" defer></script>
+</body>
+</html>

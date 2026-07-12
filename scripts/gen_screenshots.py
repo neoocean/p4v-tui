@@ -44,6 +44,11 @@ from p4v_tui.config import Config, ConnectionConfig  # noqa: E402
 from p4v_tui.p4client import P4Service               # noqa: E402
 from demo_backend import (  # noqa: E402
     DemoBackend, CLIENT, OTHER_CLIENT, USER, PORT)
+from svg_postprocess import postprocess_file  # noqa: E402
+
+# Run from the throwaway HOME so a stray ``./p4v-tui.toml`` in the real
+# project dir can't surface its path (with the real username) in any modal.
+os.chdir(_TMP_HOME)
 
 OUT_DIR = os.path.join(_ROOT, "docs", "image")
 SIZE = (120, 38)          # wide enough to show both panes + detail
@@ -219,6 +224,130 @@ async def narrow_mode(app, pilot):
     await _settle(pilot, n=6)
 
 
+async def _select_local_pending(app, pilot, row=0):
+    """Put the Pending tab up with the cursor on a *local* CL (row 0/1)."""
+    _activate_tab(app, "#right_tabs", "tab_pending")
+    await _settle(pilot)
+    t = app.query_one("#pending_table")
+    t.focus()
+    t.move_cursor(row=row)
+    await _settle(pilot)
+
+
+async def submit_confirm(app, pilot):
+    # Ctrl+S on a local pending CL → pre-submit guard + resilient-submit
+    # confirmation (the primary daily gesture).
+    await _select_local_pending(app, pilot, row=0)
+    app.action_submit_pending()
+    await _settle(pilot, n=10)
+
+
+async def new_changelist(app, pilot):
+    app.action_new_pending_cl()
+    await _settle(pilot, n=8)
+    for ch in "Tidy up the ":       # show the description editor in use
+        await pilot.press("space" if ch == " " else ch)
+    await _settle(pilot, n=4)
+
+
+async def preferences(app, pilot):
+    # Pin a generic save-target path so the real project/home path never
+    # shows in the modal's "Save target:" line.
+    from pathlib import Path
+    app.config.path = Path("~/.config/p4v-tui/config.toml")
+    app.action_show_preferences()
+    await _settle(pilot, n=10)
+
+
+async def find_file(app, pilot):
+    await _settle(pilot, n=24, dt=0.1)      # let the index ingest demo files
+    app.action_find_file()
+    await _settle(pilot, n=6)
+    for ch in "config":
+        await pilot.press(ch)
+    await pilot.press("enter")           # run the server search
+    await _settle(pilot, n=14, dt=0.1)
+
+
+async def sxs_diff(app, pilot):
+    # Side-by-side diff of a submitted CL (reused for every arbitrary diff).
+    _activate_tab(app, "#right_tabs", "tab_submitted")
+    await _settle(pilot)
+    app._open_sxs_diff("4187")
+    await _settle(pilot, n=16)
+
+
+async def get_revision(app, pilot):
+    app._open_get_revision("//depot/demo/src/...")
+    await _settle(pilot, n=10)
+
+
+async def bookmarks(app, pilot):
+    # Seed a couple of permalink-backed bookmarks, then open the picker.
+    reg = app._permalink_registry
+    v1 = reg.register("//depot/demo/src/app.py")
+    v2 = reg.register("//depot/demo/src/search_index.py")
+    v3 = reg.register("//depot/demo/docs/README.md")
+    app._bookmark_store.add(v1, "app entry point")
+    app._bookmark_store.add(v2, "search index")
+    app._bookmark_store.add(v3, "project readme")
+    await _settle(pilot, n=4)
+    app.action_bookmarks()
+    await _settle(pilot, n=8)
+
+
+async def reconnect(app, pilot):
+    # The primary value prop made visible: a mid-command reconnect banner.
+    from p4v_tui.app_shared import ConnectionBar
+    app.query_one(ConnectionBar).show_reconnecting(
+        "⟳ Reconnecting to ssl:perforce.example.com:1666 … "
+        "(attempt 2/8, backoff 4s)")
+    app.refresh()
+    await _settle(pilot, n=8)
+
+
+async def resolve(app, pilot):
+    app._open_resolve_modal("//depot/demo/src/...")
+    await _settle(pilot, n=16)
+
+
+async def annotate(app, pilot):
+    app._open_annotate("//depot/demo/src/app.py")
+    await _settle(pilot, n=18)
+
+
+async def revision_graph(app, pilot):
+    app._open_rev_graph("//depot/demo/src/app.py")
+    await _settle(pilot, n=16)
+
+
+async def timelapse(app, pilot):
+    app._open_timelapse("//depot/demo/src/app.py")
+    await _settle(pilot, n=18)
+
+
+async def file_properties(app, pilot):
+    app._open_file_properties("//depot/demo/src/app.py")
+    await _settle(pilot, n=14)
+
+
+async def workspace_menu(app, pilot):
+    # File-op context menu on a Workspace-tree leaf (Get Latest, Check Out,
+    # Revert, Reconcile, Annotate, Time-lapse, …).
+    from p4v_tui.widgets.workspace_tree import WorkspaceTree
+    _activate_tab(app, "#left_tabs", "tab_workspace")
+    await _settle(pilot)
+    tree = app.query_one(WorkspaceTree)
+    tree.focus()
+    await _expand_tree(pilot, tree, depth=3)
+    # Move the cursor down onto a file leaf, then open the menu.
+    for _ in range(3):
+        await pilot.press("down")
+    await _settle(pilot)
+    await pilot.press("m")
+    await _settle(pilot, n=8)
+
+
 # (name, description, driver, size)
 SCENES = [
     ("01-overview", "Main layout — trees, pending table, detail pane, log",
@@ -238,6 +367,29 @@ SCENES = [
     ("11-context-menu", "Pending context menu (m)", context_menu, SIZE),
     ("12-narrow-mode", "Narrow mode page navigator (48 cells)",
      narrow_mode, NARROW),
+    ("13-submit-confirm", "Submit with pre-submit guards + resilient retry",
+     submit_confirm, SIZE),
+    ("14-new-changelist", "New pending changelist", new_changelist, SIZE),
+    ("15-preferences", "Preferences — in-app TOML editor / profiles",
+     preferences, SIZE),
+    ("16-find-file", "Find File (Ctrl+Shift+F)", find_file, SIZE),
+    ("17-sxs-diff", "Side-by-side diff viewer", sxs_diff, SIZE),
+    ("18-get-revision", "Get Revision dialog (by CL / label / date / rev)",
+     get_revision, SIZE),
+    ("19-bookmarks", "Bookmark picker (permalink-backed)", bookmarks, SIZE),
+    ("20-reconnect", "Auto-reconnect banner in the ConnectionBar",
+     reconnect, SIZE),
+    ("21-resolve", "Resolve picker (Auto / Yours / Theirs / Skip)",
+     resolve, SIZE),
+    ("22-annotate", "Annotate / blame — per-line changelist", annotate, SIZE),
+    ("23-revision-graph", "Revision Graph (text-mode integration history)",
+     revision_graph, SIZE),
+    ("24-timelapse", "Time-lapse View — walk a file's revisions",
+     timelapse, SIZE),
+    ("25-file-properties", "File Properties — filetype + attributes",
+     file_properties, SIZE),
+    ("26-workspace-menu", "Workspace tree file-op context menu",
+     workspace_menu, SIZE),
 ]
 
 
@@ -285,6 +437,10 @@ async def _shoot(name, desc, drive, size):
         os.makedirs(OUT_DIR, exist_ok=True)
         app.save_screenshot(path)
     clean = _scrub_svg(path)
+    # Bake glyphs to font-independent vectors so box-drawing/text render
+    # crisply on the web regardless of the viewer's fonts (see
+    # svg_postprocess). Idempotent; a no-op if fonttools is unavailable.
+    postprocess_file(path)
     flag = "✓" if clean else "⚠ scrubbed"
     print(f"  {flag} {name}.svg  — {desc}")
     return path

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'self'">
+<title>체인지리스트 · 서브밋 — p4v-tui 가이드 4</title>
+<meta name="description" content="크로스 워크스페이스 Pending, 서브밋 가드, 셸브 사이클, 새 CL, 파일 이동, Submitted 뷰, Jira 링크.">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body data-topic="changelists">
+<div class="wrap">
+  <div class="guide-layout">
+    <aside class="toc"></aside>
+    <main class="doc">
+
+      <header style="margin-bottom:8px;">
+        <span class="kicker">상세 가이드 · 4 / 10</span>
+        <h1 style="font-size:36px;letter-spacing:-1px;margin:6px 0 10px;">체인지리스트 · 서브밋</h1>
+        <p style="font-size:18px;">미제출·제출된 체인지리스트를 다룹니다. 크로스 워크스페이스, 회복형 서브밋, 서브밋 가드, 셸브까지.</p>
+      </header>
+
+      <section>
+        <h2 style="border-top:none;">크로스 워크스페이스 Pending ➕</h2>
+        <p>Pending 표는 현재 사용자의 <strong>모든 워크스페이스</strong>에 걸친 미제출 CL 을 모읍니다
+           (<span class="inline-code">changes -s pending -u &lt;me&gt;</span>). 로컬 CL 이 먼저,
+           다른 워크스페이스의 것은 흐리게 + 노란 <span class="inline-code">↗ 워크스페이스명</span> 마커로
+           이어집니다. 원격 행은 Submit/Revert/Shelve 가 메뉴에서 빠지고, <kbd>Ctrl+S</kbd> 는 토스트로
+           거절하며, <kbd>Enter</kbd> 는 편집 대신 읽기전용 <span class="inline-code">describe</span> 뷰어를 엽니다.</p>
+        <figure>
+          <img src="../image/02-pending.svg" alt="Pending 체인지리스트 — 크로스 워크스페이스 ↗ 마커.">
+          <figcaption>Pending — 로컬 CL 아래로 다른 워크스페이스의 미제출 CL 이 ↗ 마커와 함께.</figcaption>
+        </figure>
+      </section>
+
+      <section>
+        <h2>서브밋 · 가드 · 회복력</h2>
+        <p><kbd>Ctrl+S</kbd>(또는 상세 패널의 Submit)로 서브밋합니다. 서브밋 전에는
+           <strong>사전 가드</strong>가 미해결 파일·초대형 blob·빈 CL 을 먼저 경고해 되돌아갈 틈을 줍니다.
+           실제 서브밋은 드롭에도 투명 재시도하고, 서버는 커밋했는데 응답만 유실돼도 다음 시도가
+           "이미 서브밋됨"으로 인식합니다(lost-ack 멱등성).</p>
+        <figure>
+          <img src="../image/13-submit-confirm.svg" alt="서브밋 확인 — 미해결 파일 경고와 회복형 재시도 설명.">
+          <figcaption>서브밋 가드 — "1 file(s) still need resolve" 경고 + 회복형 재시도 안내.</figcaption>
+        </figure>
+        <div class="callout">
+          <strong>기본 CL 격리</strong> ➕ — 파일을 여는 모든 동작이 새 <em>번호</em> CL 로 들어갑니다.
+          기본 체인지리스트로 새는 일이 없어, 공유 워크스페이스에서 다른 세션의 서브밋에 휩쓸리지 않습니다.
+        </div>
+      </section>
+
+      <section>
+        <h2>CL 관리 · 셸브</h2>
+        <ul>
+          <li><strong>새 Pending CL</strong> — <kbd>Ctrl+N</kbd>. 설명을 입력하면 기본 CL 이 번호 CL 로 승격.</li>
+          <li><strong>설명 편집 · 파일 토글</strong> — 상세 패널의 TextArea + SelectionList 체크박스.</li>
+          <li><strong>파일 이동</strong> — 맥락 메뉴로 기본/기존/새 CL 사이 이동.</li>
+          <li><strong>셸브 사이클</strong> — Shelve/Unshelve/Update/Delete + <strong>부분 셸브</strong>(파일 선택 피커) ➕.</li>
+          <li><strong>Submit &amp; Resolve</strong> · <strong>재리졸브</strong> · 빈 CL 삭제 · Swarm 리뷰 URL 복사 ➕.</li>
+        </ul>
+        <figure>
+          <img src="../image/11-context-menu.svg" alt="Pending 맥락 메뉴.">
+          <figcaption>Pending 맥락 메뉴(<kbd>m</kbd>) — 서브밋 · 셸브 · 이동 · 리졸브 · Swarm.</figcaption>
+        </figure>
+      </section>
+
+      <section>
+        <h2>Submitted · Jira</h2>
+        <p>Submitted 표는 제출된 CL(Change · User · Date · Description)을 보여주고,
+           <kbd>Enter</kbd> 로 읽기전용 <span class="inline-code">describe -s</span> 뷰어를 엽니다.
+           맥락 메뉴로 설명 편집(admin), 파일 리비전 받기, 이전 리비전과 디프(<kbd>Ctrl+D</kbd>),
+           라벨 태그, 트리에서 파일 보기, CL 통째 되돌리기(<span class="inline-code">undo @CL</span>) 등.</p>
+        <p><strong>Jira</strong> ➕ — <span class="inline-code">[jira]</span> 에 <span class="inline-code">base_url</span>
+           을 두면, 서브밋 시 CL 설명에서 찾은 이슈 키의 브라우즈 URL 을 제안합니다(스마트커밋 방식 —
+           라이브 Jira API 호출은 없습니다).</p>
+        <figure>
+          <img src="../image/03-submitted.svg" alt="Submitted 체인지리스트.">
+          <figcaption>Submitted — 제출된 CL 목록. Enter 로 describe 상세.</figcaption>
+        </figure>
+      </section>
+
+    </main>
+  </div>
+</div>
+<script src="../guide-nav.js" defer></script>
+<script src="../lightbox.js" defer></script>
+</body>
+</html>

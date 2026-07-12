@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'self'">
+<title>설정 파일 — p4v-tui 가이드 10</title>
+<meta name="description" content="p4v-tui.toml 전체 섹션(connection, profile, swarm, jira, external_editor, merge_tool, chunking, macro, narrow), 설정 GUI, Get Revision, 파일 속성.">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body data-topic="config">
+<div class="wrap">
+  <div class="guide-layout">
+    <aside class="toc"></aside>
+    <main class="doc">
+
+      <header style="margin-bottom:8px;">
+        <span class="kicker">상세 가이드 · 10 / 10</span>
+        <h1 style="font-size:36px;letter-spacing:-1px;margin:6px 0 10px;">설정 파일</h1>
+        <p style="font-size:18px;">모든 설정은 p4v-tui.toml 하나에 모입니다. 각 섹션과 인앱 설정 GUI 를 훑습니다.</p>
+      </header>
+
+      <section>
+        <h2 style="border-top:none;">설정 GUI — <kbd>Ctrl+,</kbd></h2>
+        <p>흩어진 설정을 떠나지 않고 편집합니다. 연결·Swarm·청킹·프로파일을 다루고, 저장하면
+           앱이 로드한 파일(또는 <span class="inline-code">./p4v-tui.toml</span>)에 씁니다.</p>
+        <figure>
+          <img src="../image/15-preferences.svg" alt="설정 화면 — 인앱 TOML 편집기 / 프로파일.">
+          <figcaption>설정 GUI — 인앱 TOML 편집기. Save target 경로가 상단에.</figcaption>
+        </figure>
+      </section>
+
+      <section>
+        <h2><span class="inline-code">p4v-tui.toml</span> 섹션</h2>
+        <p>모두 선택 사항이며 P4 환경변수 / <span class="inline-code">P4CONFIG</span> 로 폴백합니다.
+           로컬 설정 파일은 <span class="inline-code">.gitignore</span> 되어 호스트명이 커밋되지 않습니다.</p>
+        <table>
+          <thead><tr><th>섹션</th><th>용도</th></tr></thead>
+          <tbody>
+            <tr><td><span class="inline-code">[connection]</span></td><td>단일 서버(port/user/client/charset)</td></tr>
+            <tr><td><span class="inline-code">[[profile]]</span></td><td>여러 서버 — 각각 시작 피커의 한 줄</td></tr>
+            <tr><td><span class="inline-code">[swarm]</span></td><td>Swarm 리뷰 URL 생성(<span class="inline-code">base_url</span>)</td></tr>
+            <tr><td><span class="inline-code">[jira]</span></td><td>서브밋 시 이슈 링크(<span class="inline-code">base_url</span>·<span class="inline-code">projects</span>·<span class="inline-code">path_projects</span>)</td></tr>
+            <tr><td><span class="inline-code">[[external_editor]]</span></td><td>Open With… 항목(<span class="inline-code">{path}</span>/<span class="inline-code">{dir}</span>/<span class="inline-code">{name}</span>)</td></tr>
+            <tr><td><span class="inline-code">[merge_tool]</span></td><td>외부 3-way 툴(<span class="inline-code">{base}/{theirs}/{yours}/{merge}</span>)</td></tr>
+            <tr><td><span class="inline-code">[chunking]</span></td><td>청크 전략(개수/크기/단일/서브디렉토리) + 잡별 오버라이드</td></tr>
+            <tr><td><span class="inline-code">[[macro]]</span></td><td>스크립트 잡 체인(<kbd>Ctrl+Shift+M</kbd>), 선택적 <span class="inline-code">key</span> 바인딩</td></tr>
+            <tr><td><span class="inline-code">[narrow]</span></td><td><span class="inline-code">disabled_pages</span> / <span class="inline-code">skip_empty</span> / <span class="inline-code">layout</span></td></tr>
+          </tbody>
+        </table>
+        <div class="callout warn">
+          <strong>보안</strong> — <span class="inline-code">[[macro]]</span> 와
+          <span class="inline-code">[[external_editor]]</span>/Open With… 는 임의 로컬 명령을 실행합니다.
+          <strong>신뢰할 수 없는 <span class="inline-code">p4v-tui.toml</span> 을 실행하지 마세요.</strong>
+        </div>
+      </section>
+
+      <section>
+        <h2>부가 다이얼로그</h2>
+        <p>설정과 함께 자주 쓰는 두 다이얼로그입니다.</p>
+        <ul>
+          <li><strong>Get Revision</strong> ➕ — p4v 의 "Get Revision…" 포트. 여러 타깃을 CL/라벨/날짜/리비전별로,
+              Force/Safe Update/CL 내 파일/라벨에 없는 것 제거 옵션과 함께.</li>
+          <li><strong>File Properties</strong> — 파일타입·속성(<span class="inline-code">p4 attribute</span>) 보기·편집.</li>
+        </ul>
+        <figure>
+          <img src="../image/18-get-revision.svg" alt="Get Revision 다이얼로그.">
+          <figcaption>Get Revision — CL / 라벨 / 날짜 / 리비전별로 여러 타깃을.</figcaption>
+        </figure>
+        <figure>
+          <img src="../image/25-file-properties.svg" alt="파일 속성 — 파일타입 + 속성.">
+          <figcaption>File Properties — 파일타입 편집 + 속성 테이블.</figcaption>
+        </figure>
+        <div class="callout">
+          여기까지가 전체 가이드입니다. 랜딩의 <a href="/#gallery">화면 갤러리</a>에서 모든 스크린샷을
+          한눈에 볼 수 있고, 소스는 <a href="https://github.com/neoocean/p4v-tui" target="_blank" rel="noopener">GitHub</a> 에 있습니다.
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+<script src="../guide-nav.js" defer></script>
+<script src="../lightbox.js" defer></script>
+</body>
+</html>

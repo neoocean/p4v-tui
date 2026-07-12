@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'self'">
+<title>검색 · 이동 — p4v-tui 가이드 7</title>
+<meta name="description" content="Fast Search(로컬 SQLite 인덱스), Find File(서버 검색), Go-to-path, 불변 퍼머링크, 퍼머링크 기반 북마크.">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body data-topic="search">
+<div class="wrap">
+  <div class="guide-layout">
+    <aside class="toc"></aside>
+    <main class="doc">
+
+      <header style="margin-bottom:8px;">
+        <span class="kicker">상세 가이드 · 7 / 10</span>
+        <h1 style="font-size:36px;letter-spacing:-1px;margin:6px 0 10px;">검색 · 이동</h1>
+        <p style="font-size:18px;">원하는 파일을 즉시 찾고, 어디로든 점프합니다. Fast Search · Find File · Go-to-path · 퍼머링크 · 북마크.</p>
+      </header>
+
+      <section>
+        <h2 style="border-top:none;">Fast Search — <kbd>Ctrl+F</kbd></h2>
+        <p>로컬 SQLite 인덱스로 <strong>타이핑하는 즉시</strong> 파일명을 찾습니다. 미리보기 + 매치
+           하이라이트, UI 스레드 밖에서 쿼리, IME 친화 디바운스. 인덱스는 (서버, 클라이언트)별로
+           백그라운드에서 증분 재구축됩니다.</p>
+        <ul>
+          <li><strong>느슨한 매칭 사다리</strong> ➕ — 부분 문자열 → 토큰 AND(<span class="inline-code">foo bar</span>
+              가 <span class="inline-code">foo_bar</span>·<span class="inline-code">foo/bar/baz</span> 매치) →
+              Levenshtein ≤2 "이거 찾으셨나요".</li>
+          <li><span class="inline-code">?쿼리</span> 내용 grep(<span class="inline-code">p4 grep</span>) ·
+              <span class="inline-code">cl:쿼리</span> 설명 검색 ·
+              <span class="inline-code">@user:</span>/<span class="inline-code">type:</span>/<span class="inline-code">/regex/</span> 필터 ·
+              <span class="inline-code">nl:</span> 자연어.</li>
+          <li>결과 상한 토글(<kbd>Ctrl+Shift+L</kbd>) · 매치 미니맵 · 쿼리 이력(<kbd>Ctrl+P</kbd>/<kbd>Ctrl+N</kbd>) ·
+              행 액션(<kbd>d</kbd> 디프 · <kbd>g</kbd> get · <kbd>Ctrl+Enter</kbd> 뷰어).</li>
+        </ul>
+        <figure>
+          <img src="../image/09-fast-search.svg" alt="Fast Search — 즉시 결과와 미리보기.">
+          <figcaption>Fast Search — 타이핑 즉시 결과 + 미리보기.</figcaption>
+        </figure>
+      </section>
+
+      <section>
+        <h2>Find File · Go-to-path</h2>
+        <p><strong>Find File</strong>(<kbd>Ctrl+Shift+F</kbd>)은 디팟 전역 서버 검색
+           (<span class="inline-code">p4 files -m 100</span>)이며, 고른 파일로 트리를 자동 이동합니다
+           (매핑되면 Workspace, 아니면 Depot).</p>
+        <p><strong>Go-to-path</strong>(<kbd>Ctrl+G</kbd>) ➕ — 디팟(<span class="inline-code">//…</span>) ·
+           로컬 · 퍼머링크(<span class="inline-code">//@p/N</span>) 경로를 붙여넣으면 트리가 이동·강조합니다.
+           같은 느슨함+Levenshtein 사다리를 씁니다(후보 1개면 점프, 여럿이면 피커, 0 이면 제안).</p>
+        <figure>
+          <img src="../image/16-find-file.svg" alt="Find File — 서버 파일 검색.">
+          <figcaption>Find File — 서버 검색 결과에서 고르면 트리로 점프.</figcaption>
+        </figure>
+        <figure>
+          <img src="../image/10-goto-path.svg" alt="Go to path — 경로 붙여넣기로 트리 점프.">
+          <figcaption>Go-to-path — 디팟/로컬/퍼머링크 붙여넣기.</figcaption>
+        </figure>
+      </section>
+
+      <section>
+        <h2>퍼머링크 · 북마크</h2>
+        <p><strong>불변 퍼머링크</strong>(<kbd>Alt+C</kbd>) ➕ — 이동/이름변경 히스토리를 따라 현재 경로로
+           해석되는 안정 주소(<span class="inline-code">//@p/&lt;id&gt;</span>). <kbd>Ctrl+Shift+V</kbd> 로
+           마지막 복사 퍼머링크로 점프.</p>
+        <p><strong>북마크</strong>(<kbd>Ctrl+B</kbd> 추가 / <kbd>Ctrl+Shift+B</kbd> 피커) ➕ — 퍼머링크 기반이라
+           경로가 옮겨져도 살아남습니다.</p>
+        <figure>
+          <img src="../image/19-bookmarks.svg" alt="북마크 피커.">
+          <figcaption>북마크 피커 — 퍼머링크로 뒷받침돼 이동에도 생존.</figcaption>
+        </figure>
+      </section>
+
+    </main>
+  </div>
+</div>
+<script src="../guide-nav.js" defer></script>
+<script src="../lightbox.js" defer></script>
+</body>
+</html>

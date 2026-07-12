@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'self'">
+<title>p4v-tui 상세 가이드 — 챕터별 전체 기능 안내</title>
+<meta name="description" content="p4v-tui 사용 상세 가이드 개요. 설치·연결·트리 파일 작업·체인지리스트·디프/히스토리·리졸브/머지·검색/이동·연결 회복력·좁은 화면·설정까지 챕터별로 모든 기능을 스크린샷과 함께 설명합니다.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="/" style="text-decoration:none"><span class="prompt">❯</span> p4v-tui</a>
+    <div class="nav-links">
+      <a href="/">홈</a>
+      <a href="/guide">가이드 개요</a>
+      <a href="/#features">기능</a>
+      <a class="gh" href="https://github.com/neoocean/p4v-tui" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+  <div class="guide-layout">
+
+    <aside class="toc">
+      <h4>가이드 목차</h4>
+      <a class="active" href="/guide"><span class="num">☰</span>가이드 개요</a>
+      <a href="/guide/start"><span class="num">1</span>시작 · 핵심 개념</a>
+      <a href="/guide/install"><span class="num">2</span>설치 · 연결</a>
+      <a href="/guide/trees"><span class="num">3</span>트리 · 파일 작업</a>
+      <a href="/guide/changelists"><span class="num">4</span>체인지리스트 · 서브밋</a>
+      <a href="/guide/diff"><span class="num">5</span>디프 · 히스토리</a>
+      <a href="/guide/resolve"><span class="num">6</span>리졸브 · 3-way 머지</a>
+      <a href="/guide/search"><span class="num">7</span>검색 · 이동</a>
+      <a href="/guide/resilience"><span class="num">8</span>연결 회복력</a>
+      <a href="/guide/narrow"><span class="num">9</span>좁은 화면 · 모바일</a>
+      <a href="/guide/config"><span class="num">10</span>설정 파일</a>
+    </aside>
+
+    <main class="doc">
+
+      <header style="margin-bottom:8px;">
+        <span class="kicker">상세 가이드</span>
+        <h1 style="font-size:40px;letter-spacing:-1px;margin:6px 0 10px;">p4v-tui 사용 가이드</h1>
+        <p style="font-size:18px;">
+          설치·연결부터 트리 파일 작업, 체인지리스트·서브밋, 디프·히스토리, 리졸브·머지,
+          검색·이동, 연결 회복력, 좁은 화면, 설정까지 — p4v-tui 의 <strong>모든 기능</strong>을
+          실제 화면 스크린샷과 함께 챕터별로 안내합니다. 각 페이지 아래에는 이전·다음 챕터 링크가
+          있습니다. 처음이라면 <a href="/guide/start">1. 시작 · 핵심 개념</a>부터 읽으세요. 빠르게
+          둘러보려면 <a href="/">랜딩 페이지</a>를 먼저 보세요.
+        </p>
+      </header>
+
+      <section>
+        <h2 style="border-top:none;">챕터 한눈에</h2>
+        <p>아래 카드에서 원하는 주제로 바로 갈 수 있습니다. 각 챕터는 해당 기능을 빠짐없이 다룹니다.</p>
+        <div class="ch-grid">
+          <a class="ch-card" href="/guide/start"><span class="ch-num">01</span><b>시작 · 핵심 개념</b><span>무엇을·왜 · 레이아웃 · p4v 와의 위치 · 화면 구성.</span></a>
+          <a class="ch-card" href="/guide/install"><span class="ch-num">02</span><b>설치 · 연결</b><span>의존성 · 백엔드(P4Python/CLI) · 프로파일 · 인증 경계.</span></a>
+          <a class="ch-card" href="/guide/trees"><span class="ch-num">03</span><b>트리 · 파일 작업</b><span>상태 마커 · get/edit/add/revert · reconcile · 다중선택 · 클립보드.</span></a>
+          <a class="ch-card" href="/guide/changelists"><span class="ch-num">04</span><b>체인지리스트 · 서브밋</b><span>크로스 워크스페이스 · 서브밋 가드 · 셸브 · Jira.</span></a>
+          <a class="ch-card" href="/guide/diff"><span class="ch-num">05</span><b>디프 · 히스토리</b><span>통합/나란히 디프 · 임의 디프 · Annotate · 리비전 그래프 · 타임랩스.</span></a>
+          <a class="ch-card" href="/guide/resolve"><span class="ch-num">06</span><b>리졸브 · 3-way 머지</b><span>리졸브 피커 · 인앱 3-way 에디터 · 외부 머지 툴.</span></a>
+          <a class="ch-card" href="/guide/search"><span class="ch-num">07</span><b>검색 · 이동</b><span>Fast Search · Find File · Go-to-path · 퍼머링크 · 북마크.</span></a>
+          <a class="ch-card" href="/guide/resilience"><span class="ch-num">08</span><b>연결 회복력</b><span>자동 재연결 · 청크/재개 · 재개 피커 · 커맨드 모니터 · 로그.</span></a>
+          <a class="ch-card" href="/guide/narrow"><span class="ch-num">09</span><b>좁은 화면 · 모바일</b><span>단일 페이지 내비 · 폭 적응 표 · IME · CJK.</span></a>
+          <a class="ch-card" href="/guide/config"><span class="ch-num">10</span><b>설정 파일</b><span><code>p4v-tui.toml</code> 전체 · 설정 GUI · Jira · 매크로 · 머지 툴 · 청킹.</span></a>
+        </div>
+      </section>
+
+      <nav class="pager" aria-label="가이드 페이지 이동">
+        <a class="pager-next" href="/guide/start" style="grid-column:2">
+          <span class="pager-dir">다음 →</span>
+          <span class="pager-title">1. 시작 · 핵심 개념</span>
+        </a>
+      </nav>
+
+    </main>
+  </div>
+</div>
+
+<footer class="foot">
+  <div class="wrap">
+    <div><a class="brand" href="/" style="text-decoration:none"><span class="prompt">❯</span> p4v-tui</a> &nbsp; — 상세 가이드</div>
+    <div class="foot-links">
+      <a href="/">홈</a> ·
+      <a href="/guide">가이드 개요</a> ·
+      <a href="/#features">기능</a> ·
+      <a href="https://github.com/neoocean/p4v-tui" target="_blank" rel="noopener">GitHub</a> ·
+      <a href="mailto:me@woojinkim.org?subject=p4v-tui">me@woojinkim.org</a>
+    </div>
+  </div>
+</footer>
+
+<script src="lightbox.js" defer></script>
+</body>
+</html>

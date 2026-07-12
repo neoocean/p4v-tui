@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'self'">
+<title>좁은 화면 · 모바일 — p4v-tui 가이드 9</title>
+<meta name="description" content="100 컬럼 아래 단일 페이지 내비게이터, 폭 적응 표·빵부스러기·푸터, 레이아웃 핀, 한글 IME 별칭, CJK 셀폭.">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body data-topic="narrow">
+<div class="wrap">
+  <div class="guide-layout">
+    <aside class="toc"></aside>
+    <main class="doc">
+
+      <header style="margin-bottom:8px;">
+        <span class="kicker">상세 가이드 · 9 / 10</span>
+        <h1 style="font-size:36px;letter-spacing:-1px;margin:6px 0 10px;">좁은 화면 · 모바일</h1>
+        <p style="font-size:18px;">같은 느린 링크는 대개 작은 원격 화면이기도 합니다. 폰·얇은 분할에서도 legible 하도록.</p>
+      </header>
+
+      <section>
+        <h2 style="border-top:none;">단일 페이지 내비게이터 ➕</h2>
+        <p>터미널 폭이 <span class="inline-code">100</span> 컬럼 아래로 내려가면 자동으로 단일 페이지
+           내비게이터로 전환합니다. 한 화면에 한 페이지(트리 → pending → history → submitted → log)를
+           띄우고 <kbd>Tab</kbd>/<kbd>Shift+Tab</kbd> 으로 넘깁니다 — Blink 같은 폰 터미널이 Tab 은
+           보내도 Ctrl+화살표는 안 보내므로, <strong>폰에서 신뢰성 있게</strong> 동작합니다.</p>
+        <figure>
+          <img src="../image/12-narrow-mode.svg" alt="좁은 화면 페이지 내비게이터(48 컬럼).">
+          <figcaption>좁은 모드 — 48 컬럼에서 단일 페이지로 접힌 화면.</figcaption>
+        </figure>
+        <table>
+          <thead><tr><th>키</th><th>동작</th></tr></thead>
+          <tbody>
+            <tr><td><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd></td><td>다음/이전 페이지</td></tr>
+            <tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>페이지 바로가기</td></tr>
+            <tr><td><kbd>F3</kbd> / <kbd>Ctrl+W</kbd></td><td>트리 ⇄ 마지막 패널 토글</td></tr>
+            <tr><td><kbd>Backspace</kbd></td><td>트리(홈)로</td></tr>
+            <tr><td><kbd>Ctrl+→</kbd> / <kbd>Ctrl+←</kbd></td><td>데스크톱 별칭</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>폭·높이 적응</h2>
+        <ul>
+          <li><strong>폭 적응 표</strong> ➕ — 좁으면 Pending/Submitted 를 <span class="inline-code">Change · Description</span>,
+              History 를 <span class="inline-code">Rev · Action · Description</span> 로 줄임.</li>
+          <li><strong>빵부스러기·푸터</strong> — 폰 세로에서 빵부스러기는 숫자만, 푸터는 우선순위 낮은 힌트부터 드롭.</li>
+          <li><strong>짧은 뷰포트</strong> — 45 행 아래면 로그 패널을 자동 접음(<kbd>F2</kbd> 로 히스토리 유지).</li>
+          <li><strong>레이아웃 핀</strong> — <span class="inline-code">[narrow] layout = auto|narrow|wide</span> +
+              런타임 토글 <kbd>Ctrl+Shift+N</kbd>. 회전해도 페이지 복원.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>한글 IME · CJK</h2>
+        <ul>
+          <li><strong>두벌식 자모 별칭</strong> ➕ — IME 를 켜도 단축키가 작동(<kbd>s</kbd>↔<kbd>ㄴ</kbd>,
+              <kbd>e</kbd>↔<kbd>ㄷ</kbd>, <kbd>r</kbd>↔<kbd>ㄱ</kbd>, <kbd>q</kbd>↔<kbd>ㅂ</kbd> …).</li>
+          <li><strong>CJK 셀폭 인식 자름</strong> ➕ — 한글 1자 = 2셀을 계산해 표·트리 열이 깨지지 않게 자릅니다.</li>
+        </ul>
+      </section>
+
+    </main>
+  </div>
+</div>
+<script src="../guide-nav.js" defer></script>
+<script src="../lightbox.js" defer></script>
+</body>
+</html>

@@ -210,6 +210,18 @@ class DemoBackend(_Backend):
 
         if cmd == "files":
             glob = a[-1]
+            if "*" in glob and not glob.endswith("/*"):
+                # Substring search like `//.../*config*` (Find File). Match
+                # every demo file whose depot path contains the core term.
+                term = glob.strip("/").replace("...", "").strip("/*").lower()
+                out = []
+                for parent, files in _FILES.items():
+                    for base, head, _have, _act in files:
+                        depot = f"{parent}/{base}"
+                        if term in depot.lower():
+                            out.append({"depotFile": depot,
+                                        "rev": str(head), "type": "text"})
+                return out
             if glob.endswith("/...") or glob == "//...":
                 # Recursive enumerate (search-index build). Return every
                 # demo file under the prefix, in depot namespace.
@@ -241,6 +253,25 @@ class DemoBackend(_Backend):
             parent = glob[:-2] if glob.endswith("/*") else glob
             ns = _ns_of(parent)              # client path → map back to depot
             depot_parent = _to_depot(parent)
+            # Single-file fstat (File Properties): the arg is a file, not a
+            # directory glob. Return one enriched row with a couple of demo
+            # attributes so the properties modal has something to show.
+            hit = _find_file(depot_parent)
+            if hit is not None and depot_parent not in _FILES:
+                base, head, have, act = hit
+                row = {
+                    "depotFile": depot_parent,
+                    "clientFile": depot_parent.replace(
+                        "//depot", f"//{CLIENT}"),
+                    "headRev": str(head), "haveRev": str(have),
+                    "headAction": "edit", "headType": "text",
+                    "fileSize": "4821",
+                    "attr-owner": USER, "attr-reviewed": "yes",
+                }
+                if act:
+                    row["action"] = act
+                    row["change"] = _open_change_for(depot_parent)
+                return [row]
             out = []
             for base, head, have, act in _FILES.get(depot_parent, []):
                 depot = f"{depot_parent}/{base}"
@@ -306,6 +337,29 @@ class DemoBackend(_Backend):
 
         if cmd == "labels":
             return [{"label": "release-1.0"}, {"label": "nightly"}]
+
+        if cmd == "annotate":
+            # `annotate -i -c <file>` → a metadata row then one row per
+            # source line, each tagged with the CL that last changed it.
+            depot = a[-1]
+            meta = {"depotFile": depot, "rev": "7", "type": "text"}
+            rows = [meta]
+            for cl, line in _ANNOTATE_LINES:
+                rows.append({"lower": cl, "upper": cl, "data": line + "\n"})
+            return rows
+
+        if cmd == "resolve":
+            # `resolve -n <scope>` → one dict row per file needing resolve.
+            return [
+                {"clientFile": f"//{CLIENT}/demo/src/config.py",
+                 "fromFile": "//depot/demo/src/config.py",
+                 "startFromRev": "4", "endFromRev": "5",
+                 "resolveType": "content", "how": "merge from"},
+                {"clientFile": f"//{CLIENT}/demo/src/app.py",
+                 "fromFile": "//depot/demo/src/app.py",
+                 "startFromRev": "6", "endFromRev": "7",
+                 "resolveType": "content", "how": "merge from"},
+            ]
 
         # Unknown verb → empty result (the app degrades gracefully).
         return []
@@ -408,6 +462,35 @@ def _from_depot(depot_path: str, ns_prefix: str) -> str:
     if ns_prefix == "//depot" or not depot_path.startswith("//depot"):
         return depot_path
     return ns_prefix + depot_path[len("//depot"):]
+
+
+# A believable annotated body (each line tagged with the CL that set it).
+_ANNOTATE_LINES = [
+    ("4160", '"""Demo application entry point."""'),
+    ("4160", "from __future__ import annotations"),
+    ("4160", ""),
+    ("4187", "import sys"),
+    ("4160", ""),
+    ("4231", "from .config import load_config"),
+    ("4160", ""),
+    ("4160", ""),
+    ("4205", "def main(argv: list[str]) -> int:"),
+    ("4231", "    cfg = load_config()"),
+    ("4231", "    if cfg.error:"),
+    ("4231", '        print(f"config error: {cfg.error}", file=sys.stderr)'),
+    ("4231", "        return 1"),
+    ("4205", '    print(f"connected to {cfg.connection.port}")'),
+    ("4205", "    return 0"),
+]
+
+
+def _find_file(depot_path: str):
+    """Return ``(base, head, have, act)`` for a known demo file, else None."""
+    parent, _, base = depot_path.rpartition("/")
+    for b, head, have, act in _FILES.get(parent, []):
+        if b == base:
+            return (b, head, have, act)
+    return None
 
 
 def _open_change_for(depot: str) -> str:

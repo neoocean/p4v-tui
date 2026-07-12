@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'self'">
+<title>시작 · 핵심 개념 — p4v-tui 가이드 1</title>
+<meta name="description" content="p4v-tui 가 무엇이고 왜 만들어졌는지, 화면 레이아웃과 p4v 대비 위치를 30초에 잡는 큰 그림.">
+<link rel="stylesheet" href="../styles.css">
+</head>
+<body data-topic="start">
+<div class="wrap">
+  <div class="guide-layout">
+    <aside class="toc"></aside>
+    <main class="doc">
+
+      <header style="margin-bottom:8px;">
+        <span class="kicker">상세 가이드 · 1 / 10</span>
+        <h1 style="font-size:36px;letter-spacing:-1px;margin:6px 0 10px;">시작 · 핵심 개념</h1>
+        <p style="font-size:18px;">
+          본격적으로 다루기 전에, p4v-tui 가 무엇이고 어떤 문제를 푸는지, 화면이 어떻게 생겼는지
+          큰 그림을 먼저 봅니다.
+        </p>
+      </header>
+
+      <section>
+        <h2 style="border-top:none;">p4v-tui 는 무엇인가</h2>
+        <p>
+          <strong>p4v-tui</strong> 는 <a href="https://textual.textualize.io/" target="_blank" rel="noopener">Textual</a>
+          로 만든 키보드 우선 Perforce/Helix 터미널 UI 입니다. p4v(GUI)의 <strong>일상 개발 흐름</strong> —
+          get · edit · add · delete · revert · reconcile · resolve · submit · diff · history — 을 터미널
+          안에서 그대로 다룹니다.
+        </p>
+        <p>
+          하지만 진짜 목적은 따로 있습니다. p4v 는 긴 호출 하나를 붙잡고 있다가 링크가 끊기면 통째로
+          다시 시작하게 만듭니다. p4v-tui 는 <strong>느리거나 불안정한 네트워크에서 버티도록</strong>
+          다시 지어졌습니다. 모든 긴 작업을 작은 청크로 쪼개 진행 상태를 디스크에 남기고, 끊기면
+          자동으로 재연결하며, 중간에 꺼도 다음 실행이 멈춘 지점부터 이어집니다.
+        </p>
+        <figure>
+          <img src="../image/01-overview.svg" alt="p4v-tui 메인 화면 — 왼쪽 트리, 오른쪽 체인지리스트 표와 상세, 하단 로그.">
+          <figcaption>메인 레이아웃 — 왼쪽 트리, 오른쪽 체인지리스트 표 + 상세 패널, 하단 로그.</figcaption>
+        </figure>
+      </section>
+
+      <section>
+        <h2>화면 구성</h2>
+        <ul>
+          <li><strong>왼쪽 — 트리</strong>: <em>Workspace</em>(내 클라이언트 루트)와 <em>Depot</em>(디팟 네임스페이스)
+            탭. 파일마다 한 글자 상태 마커가 붙습니다.</li>
+          <li><strong>오른쪽 — 표</strong>: <em>Pending</em>(미제출 CL, 크로스 워크스페이스) · <em>Submitted</em> ·
+            <em>History</em> 탭. 아래는 선택한 CL/파일의 <strong>상세 패널</strong>.</li>
+          <li><strong>하단 — 로그</strong>: 모든 p4 호출·청크 작업·오류가 타임스탬프와 함께 쌓입니다.
+            p4v 의 한 줄 상태 바를 대체합니다.</li>
+          <li><strong>상단 — ConnectionBar</strong>: 서버·사용자·워크스페이스·루트 + 진행 스피너·재연결 배너.</li>
+          <li><strong>맨 아래 — 푸터</strong>: 현재 맥락에서 쓸 수 있는 단축키 힌트.</li>
+        </ul>
+        <div class="callout">
+          <strong>세 가지 제어 방법.</strong> ① 단축키(대부분 한 글자, 한글 IME 도 자모 별칭으로 작동) ·
+          ② 커서에서 <kbd>m</kbd> 을 눌러 여는 맥락 메뉴 · ③ 표·트리·버튼을 마우스로 클릭. 편한 걸
+          섞어 쓰면 됩니다.
+        </div>
+      </section>
+
+      <section>
+        <h2>p4v 와의 위치</h2>
+        <p>
+          p4v-tui 는 p4v 를 통째로 복제하지 않습니다. <strong>일상 개발 표면</strong>을 덮고 그 위에
+          회복력 계층을 얹는 데 집중합니다. 관리·스펙 편집 성격의 화면(워크스페이스/브랜치 매핑 편집,
+          스트림, Users/Groups/Protect, Triggers, Jobs)은 표준 <span class="inline-code">p4</span> CLI 에
+          맡깁니다.
+        </p>
+        <p>
+          <strong>인증도 일부러 앱 밖</strong>입니다 — 로그인/티켓/SSO 화면이 없습니다.
+          <span class="inline-code">p4 login</span> / <span class="inline-code">p4 logout</span> 로 처리하고,
+          보안 경계를 한 곳(CLI)에 남깁니다.
+        </p>
+        <table>
+          <thead><tr><th>표기</th><th>뜻</th></tr></thead>
+          <tbody>
+            <tr><td>✅</td><td>구현됨 (p4v 대응 기능)</td></tr>
+            <tr><td>➕</td><td>TUI 전용 — p4v 가 못 하는 것</td></tr>
+            <tr><td>⏭</td><td>범위 밖 — <span class="inline-code">p4</span> CLI 에 위임</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <div class="callout">
+        다음 챕터에서 <strong>설치와 연결</strong>을 다룹니다. 이미 실행 중이라면
+        <a href="/guide/trees">3. 트리 · 파일 작업</a>으로 건너뛰어도 됩니다.
+      </div>
+
+    </main>
+  </div>
+</div>
+<script src="../guide-nav.js" defer></script>
+<script src="../lightbox.js" defer></script>
+</body>
+</html>

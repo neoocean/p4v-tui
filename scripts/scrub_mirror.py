@@ -55,6 +55,14 @@ _SKIP_DIRS = {
     ".git", "__pycache__", "node_modules", ".venv", "venv",
     ".pytest_cache", ".ruff_cache", ".mypy_cache",
 }
+# Files never scrubbed (matched by exact basename). ``CNAME`` is a GitHub
+# Pages control file whose entire contents are, by definition, a single
+# public hostname (the custom domain). It is extensionless, so it would
+# otherwise be caught by the ``suffix == ""`` branch below and have the
+# ``<redacted>`` in ``p4v-tui.<redacted>.org`` redacted to ``<redacted>`` —
+# which silently breaks the published site's domain. Nothing secret ever
+# belongs in a CNAME, so exempting it by name is safe.
+_SKIP_FILES = {"CNAME"}
 
 
 def _fatal(msg: str) -> "NoReturn":  # noqa: F821
@@ -139,6 +147,8 @@ def _iter_text_files(root: Path):
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
         for fname in filenames:
+            if fname in _SKIP_FILES:
+                continue
             p = Path(dirpath) / fname
             if p.suffix.lower() in _TEXT_EXTENSIONS:
                 yield p

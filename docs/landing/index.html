@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'self'">
+<title>p4v-tui — 끊겨도 이어지는 터미널 Perforce 클라이언트</title>
+<meta name="description" content="Textual 로 만든 키보드 우선 Perforce/Helix 터미널 UI. p4v 의 일상 개발 기능을 모두 덮으면서, 느리고 불안정한 네트워크에서도 자동 재연결·청크/재개 동기화·논블로킹으로 버틴다. macOS · Linux, P4Python 또는 p4 CLI.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <span class="brand"><span class="prompt">❯</span> p4v-tui</span>
+    <div class="nav-links">
+      <a href="#resilience">회복력</a>
+      <a href="#features">기능</a>
+      <a href="#gallery">화면</a>
+      <a href="#install">설치</a>
+      <a href="guide">상세 가이드</a>
+      <a href="#download">다운로드</a>
+      <a class="gh" href="https://github.com/neoocean/p4v-tui" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ───────── 히어로 ───────── -->
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow">Python · Textual · Perforce / Helix · 키보드 우선</span>
+    <h1>끊겨도 <span class="grad">이어지는</span> Perforce 클라이언트</h1>
+    <p class="lede">
+      p4v 의 일상 개발 흐름(get · edit · submit · revert · reconcile · resolve)을
+      <strong>터미널 안에서 전부</strong> 다룹니다. 그리고 느리거나 불안정한 링크에서
+      <strong>자동 재연결 · 청크/재개 동기화 · 논블로킹 명령</strong>으로 버팁니다.
+      SSH 한 줄, 아이폰 Blink, 얇은 tmux 분할 어디서든.
+    </p>
+    <div class="cta">
+      <a class="btn btn-primary" href="#install">설치하고 시작하기</a>
+      <a class="btn btn-ghost" href="https://github.com/neoocean/p4v-tui" target="_blank" rel="noopener">GitHub 에서 보기 ↗</a>
+      <a class="btn btn-ghost" href="guide">상세 가이드 →</a>
+    </div>
+    <div class="hero-shot">
+      <img src="image/01-overview.svg" alt="p4v-tui 메인 화면 — 왼쪽 트리, 오른쪽 체인지리스트 표와 상세 패널, 하단 로그.">
+    </div>
+  </div>
+</header>
+
+<!-- ───────── 핵심 가치(기둥) ───────── -->
+<section>
+  <div class="wrap">
+    <div class="section-head">
+      <span class="kicker">Why p4v-tui</span>
+      <h2>GUI 를 그대로 옮긴 게 아니라, 약한 네트워크에서 버티도록 다시 지었습니다</h2>
+      <p>p4v 는 긴 호출 하나를 붙잡고 있다가 링크가 끊기면 통째로 다시 시작하게 만듭니다.
+         p4v-tui 는 모든 긴 작업을 작은 청크로 쪼개 진행 상태를 디스크에 남깁니다 —
+         동기화 중간에 꺼도, 다음 실행이 멈춘 지점부터 이어집니다.</p>
+    </div>
+    <div class="pillars">
+      <div class="pillar">
+        <div class="ic">🔌</div>
+        <h3>연결 회복력</h3>
+        <p>자동 재연결(1s→30s 백오프), 청크·재개 가능한 대량 작업, 락을 놓고 재시도해
+           다른 명령이 사이에 끼어들 수 있는 논블로킹 실행.</p>
+      </div>
+      <div class="pillar">
+        <div class="ic">🗂️</div>
+        <h3>p4v 일상 기능 전부</h3>
+        <p>Pending/Submitted, 트리 파일 작업, 디프·히스토리·블레임, 리졸브·셸브,
+           Get Revision, 파일 속성, 라벨 태그까지 하루치 워크플로를 덮습니다.</p>
+      </div>
+      <div class="pillar">
+        <div class="ic">⌨️</div>
+        <h3>키보드 우선 · 마우스도</h3>
+        <p>단축키 한 글자로 대부분의 동작. 한글 IME 를 켜도 두벌식 자모 별칭으로
+           그대로 작동하고, 표·트리·메뉴는 클릭도 됩니다.</p>
+      </div>
+      <div class="pillar">
+        <div class="ic">📱</div>
+        <h3>좁은 화면 · 모바일</h3>
+        <p>100 컬럼 아래로 내려가면 단일 페이지 내비게이터로 자동 전환. 폰에서 세로로 봐도
+           빵부스러기·푸터가 폭에 맞춰 접힙니다.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────── 연결 회복력(대표 기능) ───────── -->
+<section id="resilience" style="background:var(--bg-soft);">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="kicker">The primary value</span>
+      <h2>링크가 흔들려도 작업이 살아남습니다</h2>
+      <p>p4v-tui 의 존재 이유. 재연결·재개·논블로킹이 앱 전체에 배어 있습니다.</p>
+    </div>
+
+    <div class="feature">
+      <div class="ftext">
+        <h3>중간에 끊겨도 이어지는 동기화</h3>
+        <p>Get Latest 같은 긴 작업은 파일 단위 청크로 쪼개 완료 지점을
+           <span class="inline-code">~/.p4v-tui/sync-state/</span> 에 기록합니다.
+           연결이 끊기면 지수 백오프로 조용히 재연결하고, 다음 실행 때
+           <strong>멈춘 지점부터</strong> 재개합니다.</p>
+        <ul>
+          <li>자동 재연결 — 매 호출마다 <span class="inline-code">1s→30s</span> 백오프, 재시도 대기 중 락 해제</li>
+          <li>중단된 작업은 다음 실행의 <strong>재개/버리기 피커</strong>로 개별 복구</li>
+          <li>Lost-ack 서브밋 멱등성 — 서버는 커밋했는데 응답만 유실돼도 다음 시도가 "이미 서브밋됨"으로 인식</li>
+          <li>청크 전략 설정 가능(개수/크기/서브디렉토리) — <span class="inline-code">[chunking]</span></li>
+        </ul>
+      </div>
+      <div class="shot">
+        <img src="image/20-reconnect.svg" alt="상태 바에 표시된 자동 재연결 배너 — 재시도 2/8, 백오프 4초.">
+        <div class="cap">20 · ConnectionBar 의 자동 재연결 배너</div>
+      </div>
+    </div>
+
+    <div class="feature rev">
+      <div class="ftext">
+        <h3>지금 무슨 일이 벌어지는지 다 보입니다</h3>
+        <p>p4v 의 한 줄짜리 상태 바 대신, 모든 p4 호출·청크 작업·오류가 타임스탬프와 함께
+           쌓이는 <strong>로그 패널</strong>과, 부모/자식 명령이 어떻게 쪼개지는지 보여주는
+           <strong>커맨드 모니터</strong>(<span class="inline-code">F2</span>)를 둡니다.</p>
+        <ul>
+          <li>커맨드 모니터 — 명령별 ETA 와 청크 분해 트리</li>
+          <li>예외는 크래시 대신 로그로 라우팅 + <span class="inline-code">~/.p4v-tui/last-error.log</span> 기록</li>
+          <li>150ms 이하 즉답은 스피너를 숨겨 깜빡임 없이, 1s·8s 넘으면 단계적으로 알림</li>
+        </ul>
+      </div>
+      <div class="shot">
+        <img src="image/08-command-monitor.svg" alt="커맨드 모니터 — 부모/자식 명령 트리와 진행 상태.">
+        <div class="cap">08 · 커맨드 모니터(F2) — 청크 분해가 보인다</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────── 기능 교차 섹션 ───────── -->
+<section id="features">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="kicker">Daily workflow</span>
+      <h2>하루치 Perforce 를, 손을 키보드에서 떼지 않고</h2>
+      <p>체인지리스트부터 디프·리졸브·검색까지 — 모든 화면은 실제 앱이 그린 그대로의 스크린샷입니다.</p>
+    </div>
+
+    <div class="feature">
+      <div class="ftext">
+        <h3>크로스 워크스페이스 Pending + 서브밋 가드</h3>
+        <p>현재 사용자의 <strong>모든 워크스페이스</strong>에 걸친 미제출 CL 을 한 표에 모읍니다.
+           다른 워크스페이스의 것은 흐리게 + 노란 <span class="inline-code">↗</span> 마커로 구분하죠.
+           <span class="inline-code">Ctrl+S</span> 서브밋 전에는 미해결·초대형 파일·빈 CL 경고를
+           먼저 띄워 되돌아갈 틈을 줍니다.</p>
+        <ul>
+          <li>회복형 서브밋 — 드롭에도 투명 재시도, lost-ack 인식</li>
+          <li>기본 CL 격리 — 파일을 여는 모든 동작이 새 번호 CL 로 들어감</li>
+          <li>Jira 키 감지 — CL 설명의 이슈 키로 브라우즈 URL 제안(<span class="inline-code">[jira]</span>)</li>
+        </ul>
+      </div>
+      <div class="shot shot-stack">
+        <img src="image/02-pending.svg" alt="Pending 체인지리스트 — 크로스 워크스페이스 ↗ 마커.">
+        <img src="image/13-submit-confirm.svg" alt="서브밋 확인 — 미해결 파일 경고와 회복형 재시도 설명.">
+        <div class="cap">02 · 크로스 워크스페이스 Pending &nbsp;/&nbsp; 13 · 서브밋 가드</div>
+      </div>
+    </div>
+
+    <div class="feature rev">
+      <div class="ftext">
+        <h3>트리에서 바로 파일 작업 + 상태 마커</h3>
+        <p>워크스페이스/디팟 트리에서 파일마다 <span class="inline-code">p4 fstat</span> 기반
+           한 글자 마커(<span class="inline-code">e</span> 편집 · <span class="inline-code">+</span> 추가 ·
+           <span class="inline-code">*</span> 오래됨 · <span class="inline-code">·</span> 미동기화)를 보여줍니다.
+           커서에서 <span class="inline-code">m</span> 으로 맥락 메뉴 — Get Latest, Check Out,
+           Revert, Reconcile, Annotate, Time-lapse 까지.</p>
+        <ul>
+          <li><span class="inline-code">Space</span> 다중 선택 → 한 번의 호출로 여러 파일을 한 CL 에</li>
+          <li>대화형 Reconcile / Clean — <span class="inline-code">-n</span> 미리보기 후 파일별 체크</li>
+          <li>트리 클립보드 — <span class="inline-code">Ctrl+C/X/V</span> 로 copy/move 후 자동 서브밋</li>
+        </ul>
+      </div>
+      <div class="shot shot-stack">
+        <img src="image/06-workspace-tree.svg" alt="워크스페이스 트리 — 파일 상태 마커.">
+        <img src="image/26-workspace-menu.svg" alt="워크스페이스 트리 파일 맥락 메뉴 — Get Latest, Check Out, Revert 등.">
+        <div class="cap">06 · 상태 마커 &nbsp;/&nbsp; 26 · 파일 맥락 메뉴</div>
+      </div>
+    </div>
+
+    <div class="feature">
+      <div class="ftext">
+        <h3>디프 · 히스토리 · 블레임</h3>
+        <p>제출된 CL 은 <span class="inline-code">Ctrl+D</span> 로 통합 디프, 메뉴로 나란히 보기.
+           임의의 두 경로·리비전·CL 은 <span class="inline-code">Ctrl+Shift+D</span> 로 비교합니다.
+           파일마다 라인별 블레임, 텍스트 모드 리비전 그래프, 리비전을 걸어보는 타임랩스까지.</p>
+        <ul>
+          <li>나란히 보기(side-by-side) 디프 — 모든 임의 디프 결과에 재사용</li>
+          <li>Annotate — 각 라인을 마지막으로 바꾼 CL·사용자·날짜</li>
+          <li>Revision Graph — 통합(<span class="inline-code">filelog -i</span>) 히스토리를 텍스트로</li>
+        </ul>
+      </div>
+      <div class="shot shot-stack">
+        <img src="image/17-sxs-diff.svg" alt="나란히 보기 디프 뷰어.">
+        <img src="image/22-annotate.svg" alt="Annotate / 블레임 — 라인별 체인지리스트.">
+        <div class="cap">17 · 나란히 디프 &nbsp;/&nbsp; 22 · Annotate 블레임</div>
+      </div>
+    </div>
+
+    <div class="feature rev">
+      <div class="ftext">
+        <h3>리졸브 · 인앱 3-way 머지</h3>
+        <p>충돌 파일은 Auto / Yours / Theirs / Skip 을 파일별로 고르는 리졸브 피커로.
+           그 자리에서 <span class="inline-code">Ctrl+E</span> 를 누르면
+           <strong>인앱 3-way 머지 에디터</strong>가 열려 헝크마다 Yours/Theirs/Base/Both 를
+           고를 수 있고, <span class="inline-code">Ctrl+T</span> 로 외부 머지 툴(P4Merge 등)도
+           띄웁니다.</p>
+        <ul>
+          <li>전체/부분 셸브 사이클 — 서브밋 전 파일 선택 피커</li>
+          <li>이미 리졸브한 파일 재리졸브 — <span class="inline-code">-f -c</span> 스코프</li>
+        </ul>
+      </div>
+      <div class="shot">
+        <img src="image/21-resolve.svg" alt="리졸브 피커 — 파일별 Auto/Yours/Theirs/Skip.">
+        <div class="cap">21 · 리졸브 피커(Ctrl+E 로 3-way 에디터)</div>
+      </div>
+    </div>
+
+    <div class="feature">
+      <div class="ftext">
+        <h3>빠른 검색과 어디로든 이동</h3>
+        <p>로컬 SQLite 인덱스로 타이핑하는 즉시 파일명을 찾는
+           <strong>Fast Search</strong>(<span class="inline-code">Ctrl+F</span>) — 미리보기와
+           매치 하이라이트, 느슨한 매칭 사다리(부분→토큰 AND→Levenshtein "이거 찾으셨나요").
+           <span class="inline-code">?쿼리</span> 내용 grep, <span class="inline-code">cl:</span>
+           설명 검색, <span class="inline-code">@user:</span>·<span class="inline-code">type:</span> 필터까지.</p>
+        <ul>
+          <li>Go-to-path(<span class="inline-code">Ctrl+G</span>) — 디팟/로컬/퍼머링크 붙여넣기로 트리 점프</li>
+          <li>불변 퍼머링크(<span class="inline-code">Alt+C</span>) — 이동/이름변경을 따라가는 안정 주소</li>
+          <li>퍼머링크 기반 북마크(<span class="inline-code">Ctrl+B</span>) — 경로가 옮겨져도 살아남음</li>
+        </ul>
+      </div>
+      <div class="shot shot-stack">
+        <img src="image/09-fast-search.svg" alt="Fast Search — 즉시 결과와 미리보기.">
+        <img src="image/10-goto-path.svg" alt="Go to path — 경로 붙여넣기로 트리 점프.">
+        <div class="cap">09 · Fast Search &nbsp;/&nbsp; 10 · Go-to-path</div>
+      </div>
+    </div>
+
+    <div class="feature rev">
+      <div class="ftext">
+        <h3>인앱 파일 뷰어 · 설정 GUI</h3>
+        <p>텍스트 리프에서 <span class="inline-code">Enter</span> — 외부 뷰어로 새지 않고
+           문법 하이라이트된 파일을 바로 봅니다(이미지는 반블록 ANSI, 바이너리는 헥스).
+           연결 정보·프로파일·청크 전략은 <span class="inline-code">Ctrl+,</span> 설정 화면에서
+           TOML 을 직접 편집·저장합니다.</p>
+        <ul>
+          <li>파일 뷰어 — 5MB 상한, 1000줄 청크 렌더, 라인번호 토글(<span class="inline-code">n</span>)</li>
+          <li>여러 서버 프로파일 — 시작 시 피커, 설정에서 추가/편집/삭제</li>
+          <li>워크스페이스가 자기를 기억 — 창 크기·활성 탭·포커스·정렬 영속</li>
+        </ul>
+      </div>
+      <div class="shot shot-stack">
+        <img src="image/07-file-viewer.svg" alt="인앱 파일 뷰어 — 문법 하이라이트.">
+        <img src="image/15-preferences.svg" alt="설정 화면 — 인앱 TOML 편집기 / 프로파일.">
+        <div class="cap">07 · 파일 뷰어 &nbsp;/&nbsp; 15 · 설정 GUI</div>
+      </div>
+    </div>
+
+    <div class="feature">
+      <div class="ftext">
+        <h3>폰에서도, 얇은 분할에서도</h3>
+        <p>같은 느린 링크는 대개 <strong>작은 원격 화면</strong>이기도 합니다. 100 컬럼 아래에서
+           단일 페이지 내비게이터로 자동 전환 — <span class="inline-code">Tab</span>/<span class="inline-code">Shift+Tab</span>
+           으로 트리→pending→history→submitted→log 를 넘깁니다(Blink 이 Tab 은 보내도
+           Ctrl+화살표는 안 보내므로 폰에서 신뢰성 있게).</p>
+        <ul>
+          <li>숫자 <span class="inline-code">1</span>–<span class="inline-code">9</span> 페이지 점프, <span class="inline-code">Backspace</span> 홈</li>
+          <li>폭 적응형 표 — 좁으면 CL 표를 <span class="inline-code">Change · Description</span> 만</li>
+          <li>한글 IME 두벌식 자모 별칭 · CJK 셀폭 인식 자름</li>
+        </ul>
+      </div>
+      <div class="shot">
+        <img src="image/12-narrow-mode.svg" alt="좁은 화면 페이지 내비게이터(48 컬럼).">
+        <div class="cap">12 · 좁은 모드 페이지 내비게이터(48 컬럼)</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────── 통계 ───────── -->
+<section style="background:var(--bg-soft);">
+  <div class="wrap">
+    <div class="stats">
+      <div class="stat"><div class="n">2</div><div class="l">백엔드 — P4Python & p4 CLI 자동 선택</div></div>
+      <div class="stat"><div class="n">1s→30s</div><div class="l">재연결 지수 백오프</div></div>
+      <div class="stat"><div class="n">0</div><div class="l">데몬 · 플러그인 — 단일 진입점</div></div>
+      <div class="stat"><div class="n">100</div><div class="l">컬럼 아래 자동 좁은 모드</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────── 스크린샷 갤러리 ───────── -->
+<section id="gallery">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="kicker">More screens</span>
+      <h2>화면 갤러리</h2>
+      <p>클릭하면 확대됩니다. 모두 데모 백엔드로 그린 합성 스크린샷 — 실제 서버·계정은 담기지 않습니다.</p>
+    </div>
+    <div class="gallery">
+      <div class="gcard"><img src="image/03-submitted.svg" alt="Submitted 체인지리스트"><div class="meta"><b>제출된 CL</b><span>사용자·날짜·설명 · Enter 로 describe</span></div></div>
+      <div class="gcard"><img src="image/04-history.svg" alt="파일/폴더 히스토리"><div class="meta"><b>히스토리 패널</b><span>파일 filelog · 폴더 changes -L</span></div></div>
+      <div class="gcard"><img src="image/05-depot-tree.svg" alt="디팟 트리"><div class="meta"><b>디팟 트리</b><span>지연 로드 · 비매핑 경로는 흐리게</span></div></div>
+      <div class="gcard"><img src="image/11-context-menu.svg" alt="Pending 맥락 메뉴"><div class="meta"><b>Pending 맥락 메뉴</b><span>서브밋·셸브·이동·리졸브</span></div></div>
+      <div class="gcard"><img src="image/14-new-changelist.svg" alt="새 체인지리스트"><div class="meta"><b>새 Pending CL</b><span>Ctrl+N · 설명 입력</span></div></div>
+      <div class="gcard"><img src="image/16-find-file.svg" alt="Find File"><div class="meta"><b>Find File</b><span>Ctrl+Shift+F · 서버 파일 검색</span></div></div>
+      <div class="gcard"><img src="image/18-get-revision.svg" alt="Get Revision 다이얼로그"><div class="meta"><b>Get Revision</b><span>CL / 라벨 / 날짜 / 리비전별</span></div></div>
+      <div class="gcard"><img src="image/19-bookmarks.svg" alt="북마크 피커"><div class="meta"><b>북마크 피커</b><span>퍼머링크 기반 · 이동에도 생존</span></div></div>
+      <div class="gcard"><img src="image/23-revision-graph.svg" alt="Revision Graph"><div class="meta"><b>Revision Graph</b><span>텍스트 모드 통합 히스토리</span></div></div>
+      <div class="gcard"><img src="image/24-timelapse.svg" alt="Time-lapse View"><div class="meta"><b>Time-lapse View</b><span>리비전을 걸어보기</span></div></div>
+      <div class="gcard"><img src="image/25-file-properties.svg" alt="파일 속성"><div class="meta"><b>파일 속성</b><span>파일타입 · 속성(p4 attribute)</span></div></div>
+      <div class="gcard"><img src="image/01-overview.svg" alt="메인 레이아웃"><div class="meta"><b>메인 레이아웃</b><span>트리 · 표 · 상세 · 로그</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────── 설치 ───────── -->
+<section id="install" style="background:var(--bg-soft);">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="kicker">Install</span>
+      <h2>설치하고 실행하기</h2>
+      <p>Python 3.12+ 와 Perforce 백엔드 하나(P4Python 또는 <span class="inline-code">p4</span> CLI)면 됩니다.</p>
+    </div>
+
+    <div class="feature">
+      <div class="ftext">
+        <h3>1 · 클론 후 실행</h3>
+        <p>가상환경을 만들고 의존성을 설치한 뒤 바로 띄웁니다. Perforce 접속은
+           P4 환경변수 / <span class="inline-code">P4CONFIG</span> / <span class="inline-code">p4v-tui.toml</span>
+           중 아무거나 잡히는 것을 씁니다.</p>
+        <p>인증(login/ticket/SSO)은 <strong>일부러 앱 밖</strong>에 둡니다 —
+           보안 경계는 <span class="inline-code">p4</span> CLI 에 그대로 남깁니다.</p>
+      </div>
+      <div>
+<pre class="code"><span class="c"># 1) 소스 받기</span>
+<span class="p">$</span> git clone https://github.com/neoocean/p4v-tui
+<span class="p">$</span> cd p4v-tui
+
+<span class="c"># 2) 가상환경 + 의존성</span>
+<span class="p">$</span> python3 -m venv .venv && source .venv/bin/activate
+<span class="p">$</span> pip install -r requirements.txt
+
+<span class="c"># 3) 실행</span>
+<span class="p">$</span> python p4v.py</pre>
+      </div>
+    </div>
+
+    <div class="feature rev">
+      <div class="ftext">
+        <h3>2 · <span class="inline-code">p4v</span> 래퍼로 어디서든</h3>
+        <p>번들된 <span class="inline-code">p4v</span> 래퍼를 PATH 에 심어두면 어느 디렉토리에서든
+           실행됩니다. <span class="inline-code">.venv</span> 가 없으면 알아서 만들고 의존성을
+           설치한 뒤 띄웁니다.</p>
+        <ul>
+          <li>백엔드는 <span class="inline-code">P4V_BACKEND=python|cli</span> 로 강제 가능</li>
+          <li>자동 부트스트랩 끄기 — <span class="inline-code">P4V_NO_AUTO_SETUP=1</span></li>
+          <li>테스트 — <span class="inline-code">python -m pytest tests/ -q</span></li>
+        </ul>
+      </div>
+      <div>
+<pre class="code"><span class="c"># PATH 에 래퍼 심기</span>
+<span class="p">$</span> ln -sf "$PWD/p4v" ~/.local/bin/p4v
+
+<span class="c"># 이제 어디서든</span>
+<span class="p">$</span> p4v
+
+<span class="c"># 백엔드 고르기(선택)</span>
+<span class="p">$</span> P4V_BACKEND=python p4v   <span class="c"># P4Python</span>
+<span class="p">$</span> P4V_BACKEND=cli    p4v   <span class="c"># p4 CLI</span></pre>
+      </div>
+    </div>
+
+    <div class="callout" style="max-width:900px;margin:8px auto 0;">
+      ⚠️ <strong>보안</strong> — <span class="inline-code">[[macro]]</span> 와 Open With… 항목은 로컬 명령을
+      실행합니다. <strong>신뢰할 수 없는 <span class="inline-code">p4v-tui.toml</span> 을 실행하지 마세요.</strong>
+    </div>
+  </div>
+</section>
+
+<!-- ───────── 다운로드 ───────── -->
+<section id="download">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="kicker">Get it</span>
+      <h2>내려받기 · 더 알아보기</h2>
+      <p>공개 저장소는 GitHub 에, 상세 사용법은 가이드에 있습니다.</p>
+    </div>
+    <div class="dl-grid">
+      <a class="dl-card" href="https://github.com/neoocean/p4v-tui" target="_blank" rel="noopener">
+        <div class="dl-ic">🐙</div><b>GitHub 저장소</b>
+        <span>소스 · 이슈 · 릴리스</span>
+        <span class="dl-link">github.com/neoocean/p4v-tui ↗</span>
+      </a>
+      <a class="dl-card" href="guide">
+        <div class="dl-ic">📖</div><b>상세 가이드</b>
+        <span>설치부터 회복력·모바일까지 챕터별</span>
+        <span class="dl-link">가이드 개요 →</span>
+      </a>
+      <a class="dl-card" href="guide/install">
+        <div class="dl-ic">⚡</div><b>빠른 시작</b>
+        <span>설치 · 연결 · 백엔드 선택</span>
+        <span class="dl-link">설치 · 연결 →</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ───────── 연락 ───────── -->
+<section style="background:var(--bg-soft);">
+  <div class="wrap">
+    <div class="contact-card">
+      <div class="contact-row">
+        <span class="contact-ic">✉️</span>
+        <a class="contact-mail" href="mailto:me@woojinkim.org?subject=p4v-tui">me@woojinkim.org</a>
+      </div>
+      <p class="contact-sub">버그 제보 · 기능 제안 · 무엇이든 환영합니다.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ───────── CTA 배너 ───────── -->
+<section>
+  <div class="wrap">
+    <div class="banner">
+      <h2>느린 링크에서 Perforce 를 다시 편하게</h2>
+      <p>끊겨도 이어지는 터미널 클라이언트를 지금 켜보세요.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="#install">설치하고 시작하기</a>
+        <a class="btn btn-ghost" href="guide">상세 가이드 →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────── 푸터 ───────── -->
+<footer class="foot">
+  <div class="wrap">
+    <div><span class="brand"><span class="prompt">❯</span> p4v-tui</span> &nbsp; — 끊겨도 이어지는 터미널 Perforce 클라이언트</div>
+    <div class="foot-links">
+      <a href="#resilience">회복력</a> ·
+      <a href="#features">기능</a> ·
+      <a href="#gallery">화면</a> ·
+      <a href="guide">가이드</a> ·
+      <a href="https://github.com/neoocean/p4v-tui" target="_blank" rel="noopener">GitHub</a> ·
+      <a href="mailto:me@woojinkim.org?subject=p4v-tui">me@woojinkim.org</a>
+    </div>
+  </div>
+</footer>
+
+<script src="lightbox.js" defer></script>
+</body>
+</html>
