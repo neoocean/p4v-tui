@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' matomo.woojinkim.org 'sha256-H2U+1fLmIq25bdrqMwpNv6UQnMt6IDUjvJe8/1FWwpE='; style-src 'self' 'unsafe-inline'; img-src 'self' data: matomo.woojinkim.org; connect-src 'self' matomo.woojinkim.org; base-uri 'self'; frame-ancestors 'self'">
 <title>p4v-tui 상세 가이드 — 챕터별 전체 기능 안내</title>
 <meta name="description" content="p4v-tui 사용 상세 가이드 개요. 설치·연결·트리 파일 작업·체인지리스트·디프/히스토리·리졸브/머지·검색/이동·연결 회복력·좁은 화면·설정까지 챕터별로 모든 기능을 스크린샷과 함께 설명합니다.">
 <link rel="stylesheet" href="styles.css">
@@ -96,5 +96,20 @@
 </footer>
 
 <script src="lightbox.js" defer></script>
+<!-- Matomo -->
+<script>
+  var _paq = window._paq = window._paq || [];
+  /* tracker methods like "setCustomDimension" should be called before "trackPageView" */
+  _paq.push(['trackPageView']);
+  _paq.push(['enableLinkTracking']);
+  (function() {
+    var u="//matomo.woojinkim.org/";
+    _paq.push(['setTrackerUrl', u+'matomo.php']);
+    _paq.push(['setSiteId', '9']);
+    var d=document, g=d.createElement('script'), s=d.getElementsByTagName('script')[0];
+    g.async=true; g.src=u+'matomo.js'; s.parentNode.insertBefore(g,s);
+  })();
+</script>
+<!-- End Matomo Code -->
 </body>
 </html>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' matomo.woojinkim.org 'sha256-H2U+1fLmIq25bdrqMwpNv6UQnMt6IDUjvJe8/1FWwpE='; style-src 'self' 'unsafe-inline'; img-src 'self' data: matomo.woojinkim.org; connect-src 'self' matomo.woojinkim.org; base-uri 'self'; frame-ancestors 'self'">
 <title>디프 · 히스토리 — p4v-tui 가이드 5</title>
 <meta name="description" content="통합/나란히 디프, 임의 두 경로·리비전·CL 비교, 파일/폴더 히스토리, Annotate 블레임, 리비전 그래프, 타임랩스.">
 <link rel="stylesheet" href="../styles.css">
@@ -73,5 +73,20 @@
 </div>
 <script src="../guide-nav.js" defer></script>
 <script src="../lightbox.js" defer></script>
+<!-- Matomo -->
+<script>
+  var _paq = window._paq = window._paq || [];
+  /* tracker methods like "setCustomDimension" should be called before "trackPageView" */
+  _paq.push(['trackPageView']);
+  _paq.push(['enableLinkTracking']);
+  (function() {
+    var u="//matomo.woojinkim.org/";
+    _paq.push(['setTrackerUrl', u+'matomo.php']);
+    _paq.push(['setSiteId', '9']);
+    var d=document, g=d.createElement('script'), s=d.getElementsByTagName('script')[0];
+    g.async=true; g.src=u+'matomo.js'; s.parentNode.insertBefore(g,s);
+  })();
+</script>
+<!-- End Matomo Code -->
 </body>
 </html>

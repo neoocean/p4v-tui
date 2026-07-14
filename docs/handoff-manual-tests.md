@@ -232,6 +232,40 @@ backend): `PYTEST_ALLOW_WRITES=1 python -m pytest -q`.
   tree, the tree/tables get the full height (no squashing Log strip),
   and the Log page is full-screen + live.
 
+## Website / GitHub Pages (2026-07-12, CL 64212 + 64218)
+
+The intro/guide site lives at **`docs/landing/`** and is **live at
+https://p4v-tui.woojinkim.org** (GitHub Pages, Actions source, HTTPS
+enforced). It's a self-contained static site (no build step) with 26
+screenshots generated from the real app.
+
+- **Regenerate screenshots** (real `P4VApp` driven headless with the
+  synthetic `scripts/demo_backend.py` — no live server touched):
+  `python3 scripts/gen_screenshots.py [name-filter]` → `docs/image/*.svg`,
+  then resync the landing copy:
+  `cd docs/landing && for f in image/*.svg; do cp "../image/$(basename "$f")" "$f"; done`.
+  SVGs are post-processed by `scripts/svg_postprocess.py` into
+  font-independent vectors (needs `fonttools` + `scripts/fonts/` Fira Code).
+- **Redeploy**: submit the change, then mirror + push —
+  `SYNC_GITHUB_REMOTE=https://github.com/neoocean/p4v-tui.git ./scripts/sync-to-github.sh dry-run`
+  (inspect scrub) → `… sync`. The `pages.yml` workflow auto-deploys on any
+  `docs/landing/**` change. (Env foot-gun + Pages-enable + CNAME-scrub
+  traps are in `docs/MEMORY.md`; full procedure in
+  `docs/github-migration-and-deployment.md`.)
+
+Manual visual checks (the site can't be auto-verified for legibility):
+
+- [ ] **Live site on desktop** — browse https://p4v-tui.woojinkim.org:
+  hero + all feature rows render, every screenshot is crisp (box-drawing
+  unbroken, no font-fallback tofu), the lightbox zooms, and the top-nav
+  anchors + `/guide` links work (root-absolute links only resolve on the
+  custom domain, **not** on `neoocean.github.io/p4v-tui/`).
+- [ ] **Guide chapters** — open a few `/guide/<topic>` pages: the injected
+  nav / TOC (current chapter highlighted) / prev-next pager / footer all
+  appear, and the per-chapter screenshots + keybinding tables render.
+- [ ] **Phone / narrow** — on a real phone, the grids collapse to one
+  column, the TOC hides, and screenshots stay legible.
+
 ## Notes
 
 - Anything that fails here is most likely in the **app wiring / live p4

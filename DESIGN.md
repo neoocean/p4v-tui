@@ -589,3 +589,4 @@ archive; otherwise the CL descriptions and the cited doc are the detail):
 | 59305–59388 | 2026-06-17 | p4 action-string audit (move/delete bug class ×4 sites), search-index purge, revision-graph tests + arrow fix, de-flakes | CL descriptions |
 | 60264–60268 | 2026-06-22 | UI freeze / layout-shift fixes (ConnectionBar inline activity, history debounce, detail Enter) | ⏏ |
 | 63995–64060 | 2026-07-10 | Roadmap review + execution: Jobs ⏭ decline, manual-check automation (guards/shelve/bulk/search/shared-state), grep-watcher test, EN README + deploy, mirror re-sync, this diet | `docs/roadmap-2026-07.md` |
+| 64212–64218 | 2026-07-12 | Landing/guide website (`docs/landing/`, live at p4v-tui.woojinkim.org via GitHub Pages Actions); screenshot generator 12→26 scenes + font-independent glyph baking (`scripts/svg_postprocess.py`); mirror CNAME-scrub fix | `docs/landing/README.md`, `docs/github-migration-and-deployment.md` |

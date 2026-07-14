@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' matomo.woojinkim.org 'sha256-H2U+1fLmIq25bdrqMwpNv6UQnMt6IDUjvJe8/1FWwpE='; style-src 'self' 'unsafe-inline'; img-src 'self' data: matomo.woojinkim.org; connect-src 'self' matomo.woojinkim.org; base-uri 'self'; frame-ancestors 'self'">
 <title>p4v-tui — 끊겨도 이어지는 터미널 Perforce 클라이언트</title>
 <meta name="description" content="Textual 로 만든 키보드 우선 Perforce/Helix 터미널 UI. p4v 의 일상 개발 기능을 모두 덮으면서, 느리고 불안정한 네트워크에서도 자동 재연결·청크/재개 동기화·논블로킹으로 버틴다. macOS · Linux, P4Python 또는 p4 CLI.">
 <link rel="stylesheet" href="styles.css">
@@ -457,5 +457,20 @@
 </footer>
 
 <script src="lightbox.js" defer></script>
+<!-- Matomo -->
+<script>
+  var _paq = window._paq = window._paq || [];
+  /* tracker methods like "setCustomDimension" should be called before "trackPageView" */
+  _paq.push(['trackPageView']);
+  _paq.push(['enableLinkTracking']);
+  (function() {
+    var u="//matomo.woojinkim.org/";
+    _paq.push(['setTrackerUrl', u+'matomo.php']);
+    _paq.push(['setSiteId', '9']);
+    var d=document, g=d.createElement('script'), s=d.getElementsByTagName('script')[0];
+    g.async=true; g.src=u+'matomo.js'; s.parentNode.insertBefore(g,s);
+  })();
+</script>
+<!-- End Matomo Code -->
 </body>
 </html>
